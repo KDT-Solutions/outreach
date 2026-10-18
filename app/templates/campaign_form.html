@@ -1,0 +1,51 @@
+{% extends "base.html" %}{% from "_macros.html" import status_badge %}
+{% block content %}
+<h1>{% if c %}{{ c.name }} <span class="badge {{ 'ok' if c.status=='active' else '' }}">{{ c.status }}</span>{% else %}Neue Kampagne{% endif %}</h1>
+
+{% if c %}
+<div class="card">
+<div class="stats">
+{% for s, n in counts.items() %}<div class="stat"><b>{{ n }}</b>{{ status_badge(s) }}</div>{% endfor %}
+{% if not counts %}<span class="muted">Noch keine Leads. Sourcing läuft, sobald die Kampagne aktiv ist (Worker-Intervall).</span>{% endif %}
+</div>
+<div class="actions">
+<form method="post" action="/campaigns/{{ c.id }}/status" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}">
+{% if c.status != 'active' %}<button name="status" value="active">Aktivieren</button>{% endif %}
+{% if c.status == 'active' %}<button name="status" value="paused" class="secondary">Pausieren</button>{% endif %}
+{% if c.status != 'done' %}<button name="status" value="done" class="secondary">Abschliessen</button>{% endif %}
+<button name="action" value="resource" class="secondary" title="Suchanfragen erneut ausführen, nur neue Firmen werden ergänzt">Sourcing erneut</button>
+</form>
+<a class="btn secondary" href="/leads?campaign={{ c.id }}">Leads anzeigen</a>
+<a class="btn secondary" href="/review?tenant={{ c.tenant_id }}">Freigabe</a>
+</div>
+{% if c.sourcing_log %}<details><summary class="small muted">Sourcing-Protokoll</summary><pre class="mail">{{ c.sourcing_log }}</pre></details>{% endif %}
+</div>
+{% endif %}
+
+<form method="post" action="/campaigns/save">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+{% if c %}<input type="hidden" name="id" value="{{ c.id }}">{% endif %}
+<div class="card">
+<div class="row">
+<div><label>Name</label><input type="text" name="name" value="{{ c.name if c else '' }}" required></div>
+<div><label>Mandant</label>
+{% if c %}<input type="text" value="{{ c.tenant.name }}" disabled>{% else %}
+<select name="tenant_id">{% for t in tenants %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}</select>{% endif %}</div>
+<div><label>Sprache</label><select name="language">{% for code, lbl in [('de','Deutsch'),('fr','Französisch'),('it','Italienisch'),('en','Englisch')] %}<option value="{{ code }}" {{ 'selected' if c and c.language==code }}>{{ lbl }}</option>{% endfor %}</select></div>
+<div><label>Max. Leads</label><input type="number" name="max_leads" value="{{ c.max_leads if c else 200 }}" min="1" max="5000"></div>
+</div>
+<label>Suchanfragen für Google Places <span class="hint">eine pro Zeile, Branche + Ort, z.B. "Autogarage Basel"</span></label>
+<textarea name="search_queries" class="mono" rows="6">{{ c.search_queries if c else '' }}</textarea>
+<label>Zielgruppe <span class="hint">wer das ist und was sie beschäftigt</span></label>
+<textarea name="target_description">{{ c.target_description if c else '' }}</textarea>
+<label>Angebot / Nutzen für diese Zielgruppe</label>
+<textarea name="offer">{{ c.offer if c else '' }}</textarea>
+<label>Tonalität <span class="hint">optional</span></label>
+<input type="text" name="tone" value="{{ c.tone if c else '' }}">
+<label>Sequenz <span class="hint">JSON-Liste; delay_days zählt ab dem vorherigen Versand</span></label>
+<textarea name="steps" class="mono" rows="9">{{ steps_json }}</textarea>
+<div class="check"><input type="checkbox" name="auto_approve" id="aa" {{ 'checked' if c and c.auto_approve }}><label for="aa" style="margin:0">Entwürfe automatisch freigeben (ohne manuelle Prüfung senden)</label></div>
+</div>
+<div class="actions"><button>Speichern</button> <a class="btn secondary" href="/campaigns">Zurück</a></div>
+</form>
+{% endblock %}

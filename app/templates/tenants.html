@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Mandanten</h1>
+<p><a class="btn" href="/tenants/new">Neuer Mandant</a></p>
+<table><tr><th>Name</th><th>Slug</th><th>Absender</th><th>Limit/Tag</th><th>SMTP2GO</th><th>IMAP</th><th>Zammad</th><th>Aktiv</th></tr>
+{% for t in tenants %}
+<tr><td><a href="/tenants/{{ t.id }}">{{ t.name }}</a></td><td>{{ t.slug }}</td><td>{{ t.from_name }} &lt;{{ t.from_email }}&gt;</td><td>{{ t.daily_limit }}</td>
+<td>{% if t.smtp2go_api_key_enc %}<span class="badge ok">ok</span>{% else %}<span class="badge bad">fehlt</span>{% endif %}</td>
+<td>{% if t.imap_host %}<span class="badge ok">{{ t.imap_host }}</span>{% else %}<span class="badge">–</span>{% endif %}</td>
+<td>{% if t.zammad_url %}<span class="badge ok">{{ t.zammad_group }}</span>{% else %}<span class="badge">–</span>{% endif %}</td>
+<td>{{ 'ja' if t.active else 'nein' }}</td></tr>
+{% else %}<tr><td colspan="8" class="muted">Noch keine Mandanten.</td></tr>{% endfor %}
+</table>
+{% endblock %}

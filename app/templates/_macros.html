@@ -1,0 +1,8 @@
+{% macro status_badge(s) -%}
+{% set cls = {'enriched':'info','scheduled':'info','in_sequence':'info','finished':'ok','replied':'ok','needs_review':'warn','no_email':'bad','bounced':'bad','unsubscribed':'bad','stopped':'','skipped':'','new':''}[s] if s in ['enriched','scheduled','in_sequence','finished','replied','needs_review','no_email','bounced','unsubscribed','stopped','skipped','new'] else '' %}
+<span class="badge {{ cls }}">{{ s }}</span>
+{%- endmacro %}
+
+{% macro dt(value) -%}
+{% if value %}{{ value.strftime('%d.%m.%Y %H:%M') }}{% else %}–{% endif %}
+{%- endmacro %}

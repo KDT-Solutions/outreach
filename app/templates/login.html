@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Outreach – Login</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main><div class="card login">
+<h1>Outreach</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" action="/login">
+<label>Benutzer</label><input type="text" name="username" autocomplete="username" required>
+<label>Passwort</label><input type="password" name="password" autocomplete="current-password" required>
+<div class="actions"><button>Anmelden</button></div>
+</form>
+</div></main></body></html>

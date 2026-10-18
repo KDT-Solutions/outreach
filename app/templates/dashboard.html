@@ -1,0 +1,37 @@
+{% extends "base.html" %}{% from "_macros.html" import status_badge, dt %}
+{% block content %}
+<h1>Übersicht</h1>
+{% if not rows %}<div class="card">Noch kein Mandant angelegt. <a href="/tenants/new">Ersten Mandanten anlegen</a>.</div>{% endif %}
+<div class="grid">
+{% for r in rows %}
+<div class="card">
+  <h2 style="margin-top:0"><a href="/tenants/{{ r.tenant.id }}">{{ r.tenant.name }}</a>
+    {% if not r.tenant.active %}<span class="badge">inaktiv</span>{% endif %}
+    {% if not r.has_key %}<span class="badge bad">kein SMTP2GO-Key</span>{% endif %}
+  </h2>
+  <div class="stats">
+    <div class="stat"><b>{{ r.total }}</b>Leads</div>
+    <div class="stat"><b>{{ r.drafts }}</b><a href="/review?tenant={{ r.tenant.id }}">Entwürfe</a></div>
+    <div class="stat"><b>{{ r.sent_today }} / {{ r.tenant.daily_limit }}</b>heute gesendet</div>
+    <div class="stat"><b>{{ r.counts.get('replied', 0) }}</b>Antworten</div>
+  </div>
+  <p class="small muted">Sendefenster {{ r.tenant.send_hour_start }}–{{ r.tenant.send_hour_end }} Uhr{% if r.tenant.send_weekdays_only %}, Mo–Fr{% endif %} · {% if r.in_window %}<span class="badge ok">offen</span>{% else %}<span class="badge">geschlossen</span>{% endif %}</p>
+  <p class="small">{% for s, n in r.counts.items() %}{{ status_badge(s) }} {{ n }} {% endfor %}</p>
+</div>
+{% endfor %}
+</div>
+
+<h2>Kampagnen</h2>
+<table><tr><th>Name</th><th>Mandant</th><th>Status</th><th>Sourcing</th><th>Freigabe</th></tr>
+{% for c in campaigns %}
+<tr><td><a href="/campaigns/{{ c.id }}">{{ c.name }}</a></td><td>{{ c.tenant.name }}</td><td><span class="badge {{ 'ok' if c.status=='active' else '' }}">{{ c.status }}</span></td><td>{{ 'erledigt' if c.sourcing_done else 'ausstehend' }}</td><td>{{ 'automatisch' if c.auto_approve else 'manuell' }}</td></tr>
+{% else %}<tr><td colspan="5" class="muted">Keine Kampagnen. <a href="/campaigns/new">Neue Kampagne</a></td></tr>{% endfor %}
+</table>
+
+<h2>Letzte Ereignisse</h2>
+<table><tr><th>Zeit</th><th>Art</th><th>Detail</th></tr>
+{% for e in events %}
+<tr><td class="small muted">{{ dt(e.created_at) }}</td><td><span class="badge">{{ e.kind }}</span></td><td>{% if e.lead_id %}<a href="/leads/{{ e.lead_id }}">#{{ e.lead_id }}</a> {% endif %}{{ e.detail }}</td></tr>
+{% else %}<tr><td colspan="3" class="muted">Noch nichts passiert.</td></tr>{% endfor %}
+</table>
+{% endblock %}

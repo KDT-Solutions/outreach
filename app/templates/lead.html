@@ -1,0 +1,69 @@
+{% extends "base.html" %}{% from "_macros.html" import status_badge, dt %}
+{% block content %}
+<h1>{{ lead.company }} {{ status_badge(lead.status) }}</h1>
+<div class="grid">
+<div class="card">
+<table>
+<tr><th>Kampagne</th><td><a href="/campaigns/{{ lead.campaign.id }}">{{ lead.campaign.name }}</a> ({{ lead.campaign.tenant.name }})</td></tr>
+<tr><th>Adresse</th><td>{{ lead.address or '–' }}</td></tr>
+<tr><th>Telefon</th><td>{{ lead.phone or '–' }}</td></tr>
+<tr><th>Webseite</th><td>{% if lead.website %}<a href="{{ lead.website }}" target="_blank" rel="noopener">{{ lead.website }}</a>{% else %}–{% endif %}</td></tr>
+<tr><th>E-Mail</th><td>{{ lead.email or '–' }} {% if lead.email_source %}<span class="badge">{{ lead.email_source }}</span>{% endif %} {% if lead.email_mx_ok %}<span class="badge ok">MX ok</span>{% elif lead.email %}<span class="badge bad">kein MX</span>{% endif %}</td></tr>
+<tr><th>Ansprechperson</th><td>{{ lead.contact_name or '–' }}{% if lead.salutation %} <span class="muted small">({{ lead.salutation }})</span>{% endif %}</td></tr>
+<tr><th>Google-Typen</th><td class="small">{{ lead.place_types or '–' }}</td></tr>
+<tr><th>Suchanfrage</th><td class="small">{{ lead.source_query or '–' }}</td></tr>
+<tr><th>Schritt</th><td>{{ lead.step }} / {{ lead.campaign.steps|length }}</td></tr>
+<tr><th>Nächster Versand</th><td>{{ dt(lead.next_send_at) }}</td></tr>
+<tr><th>Letzter Versand</th><td>{{ dt(lead.last_sent_at) }}</td></tr>
+<tr><th>Notiz</th><td>{{ lead.notes or '–' }}</td></tr>
+{% if lead.last_error %}<tr><th>Fehler</th><td class="error small">{{ lead.last_error }}</td></tr>{% endif %}
+</table>
+</div>
+<div class="card">
+<h2 style="margin-top:0">Aktionen</h2>
+<form method="post" action="/leads/{{ lead.id }}/action" class="actions"><input type="hidden" name="csrf" value="{{ csrf }}">
+<button name="action" value="generate" class="secondary small" {% if not lead.email %}disabled{% endif %}>Text generieren</button>
+<button name="action" value="requeue" class="secondary small">Neu anreichern</button>
+<button name="action" value="skip" class="secondary small">Überspringen</button>
+<button name="action" value="stop" class="danger small">Stoppen</button>
+<button name="action" value="suppress" class="danger small" {% if not lead.email %}disabled{% endif %}>Auf Sperrliste</button>
+</form>
+<form method="post" action="/leads/{{ lead.id }}/action"><input type="hidden" name="csrf" value="{{ csrf }}">
+<label>E-Mail manuell setzen</label><input type="email" name="email" value="{{ lead.email or '' }}">
+<div class="actions"><button name="action" value="set_email" class="secondary small">Übernehmen</button></div>
+</form>
+<form method="post" action="/leads/{{ lead.id }}/action"><input type="hidden" name="csrf" value="{{ csrf }}">
+<label>Notiz</label><textarea name="notes" rows="2">{{ lead.notes }}</textarea>
+<div class="actions"><button name="action" value="note" class="secondary small">Speichern</button></div>
+</form>
+</div>
+</div>
+
+<h2>Nachrichten</h2>
+{% for m in lead.messages %}
+<div class="card {{ 'draft' if m.status=='draft' }}">
+<p class="small muted">{{ 'Eingang' if m.direction=='in' else 'Schritt ' ~ (m.step+1) }} · <span class="badge {{ 'ok' if m.status in ('sent','received') else 'warn' if m.status=='draft' else 'info' if m.status=='approved' else 'bad' }}">{{ m.status }}</span>
+{% if m.classification %}<span class="badge info">{{ m.classification }}</span>{% endif %}
+{% if m.sent_at %}· gesendet {{ dt(m.sent_at) }}{% endif %}{% if m.from_email %}· von {{ m.from_email }}{% endif %}{% if m.error %} · <span class="error">{{ m.error }}</span>{% endif %}</p>
+{% if m.status == 'draft' %}
+<form method="post" action="/messages/{{ m.id }}/decide"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/leads/{{ lead.id }}">
+<label>Betreff</label><input type="text" name="subject" value="{{ m.subject }}">
+<label>Text</label><textarea name="body" rows="10">{{ m.body }}</textarea>
+<div class="actions"><button name="decision" value="approve">Freigeben</button><button name="decision" value="save" class="secondary">Nur speichern</button><button name="decision" value="regenerate" class="secondary">Neu generieren</button><button name="decision" value="discard" class="danger">Verwerfen</button></div>
+</form>
+{% else %}
+<p><b>{{ m.subject }}</b></p>
+<pre class="mail">{{ m.body }}</pre>
+{% endif %}
+</div>
+{% else %}<p class="muted">Noch keine Nachrichten.</p>{% endfor %}
+
+<h2>Webseiten-Auszug</h2>
+<div class="grid">
+<div><p class="small muted">Startseite</p><div class="excerpt">{{ lead.site_excerpt or '–' }}</div></div>
+<div><p class="small muted">Impressum / Kontakt</p><div class="excerpt">{{ lead.impressum_excerpt or '–' }}</div></div>
+</div>
+
+<h2>Protokoll</h2>
+<table>{% for e in events %}<tr><td class="small muted">{{ dt(e.created_at) }}</td><td><span class="badge">{{ e.kind }}</span></td><td>{{ e.detail }}</td></tr>{% else %}<tr><td class="muted">–</td></tr>{% endfor %}</table>
+{% endblock %}

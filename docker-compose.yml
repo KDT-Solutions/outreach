@@ -1,0 +1,67 @@
+services:
+  app:
+    build: .
+    image: outreach-app:latest
+    container_name: outreach-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+psycopg://outreach:${POSTGRES_PASSWORD}@db:5432/outreach
+      - SECRET_KEY=${SECRET_KEY}
+      - DATA_ENCRYPTION_KEY=${DATA_ENCRYPTION_KEY}
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - API_TOKEN=${API_TOKEN}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+      - GOOGLE_PLACES_API_KEY=${GOOGLE_PLACES_API_KEY}
+      - HUNTER_API_KEY=${HUNTER_API_KEY:-}
+      - TZ=${TZ:-Europe/Zurich}
+    ports:
+      - "${HOST_PORT:-8427}:8000"
+
+  worker:
+    build: .
+    image: outreach-app:latest
+    container_name: outreach-worker
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+psycopg://outreach:${POSTGRES_PASSWORD}@db:5432/outreach
+      - SECRET_KEY=${SECRET_KEY}
+      - DATA_ENCRYPTION_KEY=${DATA_ENCRYPTION_KEY}
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - API_TOKEN=${API_TOKEN}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+      - GOOGLE_PLACES_API_KEY=${GOOGLE_PLACES_API_KEY}
+      - HUNTER_API_KEY=${HUNTER_API_KEY:-}
+      - TZ=${TZ:-Europe/Zurich}
+      - WORKER_INTERVAL_SECONDS=${WORKER_INTERVAL_SECONDS:-60}
+
+  db:
+    image: postgres:16-alpine
+    container_name: outreach-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=outreach
+      - POSTGRES_USER=outreach
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - outreach-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U outreach -d outreach"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  outreach-db:

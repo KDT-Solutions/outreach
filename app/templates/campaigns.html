@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% from "_macros.html" import status_badge %}
+{% block content %}
+<h1>Kampagnen</h1>
+<p><a class="btn" href="/campaigns/new">Neue Kampagne</a></p>
+<table><tr><th>Name</th><th>Mandant</th><th>Status</th><th>Leads</th><th>Stände</th><th>Freigabe</th></tr>
+{% for r in rows %}
+<tr><td><a href="/campaigns/{{ r.c.id }}">{{ r.c.name }}</a></td><td>{{ r.c.tenant.name }}</td>
+<td><span class="badge {{ 'ok' if r.c.status=='active' else 'warn' if r.c.status=='paused' else '' }}">{{ r.c.status }}</span></td>
+<td><a href="/leads?campaign={{ r.c.id }}">{{ r.total }}</a></td>
+<td class="small">{% for s, n in r.counts.items() %}{{ status_badge(s) }} {{ n }} {% endfor %}</td>
+<td>{{ 'automatisch' if r.c.auto_approve else 'manuell' }}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">Noch keine Kampagnen.</td></tr>{% endfor %}
+</table>
+{% endblock %}

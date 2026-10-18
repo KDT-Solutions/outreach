@@ -1,0 +1,20 @@
+{% extends "base.html" %}{% from "_macros.html" import status_badge %}
+{% block content %}
+<h1>Freigabe <span class="badge warn">{{ total }} offen</span></h1>
+<form method="get" action="/review" class="filters">
+<div><label>Mandant</label><select name="tenant"><option value="">alle</option>{% for t in tenants %}<option value="{{ t.id }}" {{ 'selected' if tenant==t.id }}>{{ t.name }}</option>{% endfor %}</select></div>
+<div><button class="secondary">Filtern</button></div>
+</form>
+{% for m in drafts %}
+<div class="card draft">
+<p><b><a href="/leads/{{ m.lead.id }}">{{ m.lead.company }}</a></b> · {{ m.lead.email }} · {{ m.lead.campaign.name }} · Schritt {{ m.step + 1 }}
+{% if m.lead.website %}· <a href="{{ m.lead.website }}" target="_blank" rel="noopener">Webseite</a>{% endif %}
+{% if m.lead.contact_name %}· {{ m.lead.contact_name }}{% endif %}</p>
+<form method="post" action="/messages/{{ m.id }}/decide"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/review{% if tenant %}?tenant={{ tenant }}{% endif %}">
+<label>Betreff</label><input type="text" name="subject" value="{{ m.subject }}">
+<label>Text</label><textarea name="body" rows="9">{{ m.body }}</textarea>
+<div class="actions"><button name="decision" value="approve">Freigeben</button><button name="decision" value="save" class="secondary">Nur speichern</button><button name="decision" value="regenerate" class="secondary">Neu generieren</button><button name="decision" value="discard" class="danger">Verwerfen</button></div>
+</form>
+</div>
+{% else %}<div class="card">Keine offenen Entwürfe.</div>{% endfor %}
+{% endblock %}

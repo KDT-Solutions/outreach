@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{% if t %}{{ t.name }}{% else %}Neuer Mandant{% endif %}</h1>
+<form method="post" action="/tenants/save">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+{% if t %}<input type="hidden" name="id" value="{{ t.id }}">{% endif %}
+
+<div class="card">
+<h2 style="margin-top:0">Identität</h2>
+<div class="row">
+<div><label>Name</label><input type="text" name="name" value="{{ t.name if t else '' }}" required></div>
+<div><label>Slug <span class="hint">klein, ohne Leerzeichen, z.B. dodolock</span></label><input type="text" name="slug" value="{{ t.slug if t else '' }}" pattern="[a-z0-9\-]+" required></div>
+<div><label>Webseite</label><input type="text" name="website" value="{{ t.website or '' if t else '' }}"></div>
+</div>
+<div class="row">
+<div><label>Absendername</label><input type="text" name="from_name" value="{{ t.from_name if t else '' }}" required></div>
+<div><label>Absenderadresse <span class="hint">Domain muss in SMTP2GO verifiziert sein</span></label><input type="email" name="from_email" value="{{ t.from_email if t else '' }}" required></div>
+<div><label>Reply-To <span class="hint">leer = Absenderadresse</span></label><input type="email" name="reply_to" value="{{ t.reply_to or '' if t else '' }}"></div>
+</div>
+<label>Was die Firma anbietet <span class="hint">in deinen Worten, geht in jeden Prompt</span></label>
+<textarea name="company_blurb">{{ t.company_blurb if t else '' }}</textarea>
+<label>Signatur <span class="hint">wird unter jede Mail gesetzt</span></label>
+<textarea name="signature">{{ t.signature if t else '' }}</textarea>
+<label>Fusszeile <span class="hint">Firma und Postadresse, Pflicht für Werbemails; der Abmeldelink wird automatisch angehängt</span></label>
+<textarea name="footer">{{ t.footer if t else '' }}</textarea>
+<div class="check"><input type="checkbox" name="active" id="active" {{ 'checked' if (t.active if t else True) }}><label for="active" style="margin:0">Aktiv</label></div>
+</div>
+
+<div class="card">
+<h2 style="margin-top:0">Versand</h2>
+<div class="row">
+<div><label>SMTP2GO API-Key <span class="hint">{% if t and t.smtp2go_api_key_enc %}gesetzt, leer lassen zum Behalten{% else %}fehlt{% endif %}</span></label><input type="password" name="smtp2go_api_key" autocomplete="new-password"></div>
+<div><label>Limit pro Tag</label><input type="number" name="daily_limit" value="{{ t.daily_limit if t else 40 }}" min="1" max="500"></div>
+<div><label>Sendefenster von (Stunde)</label><input type="number" name="send_hour_start" value="{{ t.send_hour_start if t else 9 }}" min="0" max="23"></div>
+<div><label>bis (Stunde)</label><input type="number" name="send_hour_end" value="{{ t.send_hour_end if t else 17 }}" min="1" max="24"></div>
+<div><label>Zeitzone</label><input type="text" name="timezone" value="{{ t.timezone if t else 'Europe/Zurich' }}"></div>
+</div>
+<div class="check"><input type="checkbox" name="send_weekdays_only" id="wd" {{ 'checked' if (t.send_weekdays_only if t else True) }}><label for="wd" style="margin:0">Nur Montag bis Freitag</label></div>
+{% if t %}<p class="small muted">Webhook-URL für SMTP2GO (Bounce, Spam, Unsubscribe): <code>{{ settings.public_base_url }}/webhooks/smtp2go/{{ t.slug }}/{{ t.webhook_token }}</code></p>{% endif %}
+</div>
+
+<div class="card">
+<h2 style="margin-top:0">Antworten lesen (IMAP, optional)</h2>
+<p class="small muted">Das Postfach der Absender- bzw. Reply-To-Adresse. Es werden nur ungelesene Mails geprüft; nur Antworten auf Outreach-Mails werden als gelesen markiert.</p>
+<div class="row">
+<div><label>IMAP-Host</label><input type="text" name="imap_host" value="{{ t.imap_host or '' if t else '' }}"></div>
+<div><label>Port</label><input type="number" name="imap_port" value="{{ t.imap_port if t else 993 }}"></div>
+<div><label>Benutzer</label><input type="text" name="imap_user" value="{{ t.imap_user or '' if t else '' }}"></div>
+<div><label>Passwort <span class="hint">{% if t and t.imap_password_enc %}gesetzt{% endif %}</span></label><input type="password" name="imap_password" autocomplete="new-password"></div>
+<div><label>Ordner</label><input type="text" name="imap_folder" value="{{ t.imap_folder if t else 'INBOX' }}"></div>
+</div>
+</div>
+
+<div class="card">
+<h2 style="margin-top:0">Zammad-Übergabe (optional)</h2>
+<p class="small muted">Jede echte Antwort wird als Ticket in dieser Gruppe angelegt, mit den Lead-Daten als interne Notiz.</p>
+<div class="row">
+<div><label>Zammad-URL</label><input type="text" name="zammad_url" value="{{ t.zammad_url or '' if t else '' }}" placeholder="https://helpdesk.example.com"></div>
+<div><label>Gruppe</label><input type="text" name="zammad_group" value="{{ t.zammad_group or '' if t else '' }}"></div>
+<div><label>API-Token <span class="hint">{% if t and t.zammad_token_enc %}gesetzt{% endif %}</span></label><input type="password" name="zammad_token" autocomplete="new-password"></div>
+</div>
+</div>
+
+<div class="actions"><button>Speichern</button> <a class="btn secondary" href="/tenants">Zurück</a></div>
+</form>
+{% endblock %}

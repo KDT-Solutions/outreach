@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Outreach{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<nav>
+  <span class="brand">Outreach</span>
+  <a href="/" class="{{ 'active' if request.url.path == '/' }}">Übersicht</a>
+  <a href="/review" class="{{ 'active' if request.url.path.startswith('/review') }}">Freigabe</a>
+  <a href="/campaigns" class="{{ 'active' if request.url.path.startswith('/campaigns') }}">Kampagnen</a>
+  <a href="/leads" class="{{ 'active' if request.url.path.startswith('/leads') }}">Leads</a>
+  <a href="/tenants" class="{{ 'active' if request.url.path.startswith('/tenants') }}">Mandanten</a>
+  <a href="/suppressions" class="{{ 'active' if request.url.path.startswith('/suppressions') }}">Sperrliste</a>
+  <a href="/events" class="{{ 'active' if request.url.path.startswith('/events') }}">Protokoll</a>
+  <form method="post" action="/logout"><button class="secondary small">Abmelden</button></form>
+</nav>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

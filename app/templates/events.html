@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% from "_macros.html" import dt %}
+{% block content %}
+<h1>Protokoll</h1>
+<table><tr><th>Zeit</th><th>Art</th><th>Lead</th><th>Detail</th></tr>
+{% for e in events %}<tr><td class="small muted">{{ dt(e.created_at) }}</td><td><span class="badge">{{ e.kind }}</span></td><td>{% if e.lead_id %}<a href="/leads/{{ e.lead_id }}">#{{ e.lead_id }}</a>{% endif %}</td><td>{{ e.detail }}</td></tr>
+{% else %}<tr><td colspan="4" class="muted">Leer.</td></tr>{% endfor %}</table>
+{% endblock %}

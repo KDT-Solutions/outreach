@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% from "_macros.html" import dt %}
+{% block content %}
+<h1>Sperrliste</h1>
+<div class="card">
+<form method="post" action="/suppressions/add" class="filters"><input type="hidden" name="csrf" value="{{ csrf }}">
+<div><label>Mandant</label><select name="tenant_id">{% for t in tenants %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}</select></div>
+<div><label>E-Mail oder @domain</label><input type="text" name="value" placeholder="name@firma.ch oder @firma.ch" required></div>
+<div><button>Sperren</button></div>
+</form>
+</div>
+<table><tr><th>Wert</th><th>Grund</th><th>Mandant</th><th>Seit</th></tr>
+{% for s in rows %}<tr><td>{{ s.value }}</td><td><span class="badge">{{ s.reason }}</span></td><td>{{ s.tenant_id }}</td><td class="small muted">{{ dt(s.created_at) }}</td></tr>
+{% else %}<tr><td colspan="4" class="muted">Leer.</td></tr>{% endfor %}</table>
+{% endblock %}
