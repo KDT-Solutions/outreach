@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     hunter_api_key: str = ""
     # Global SMTP2GO key, used when a tenant has none of its own
     smtp2go_api_key: str = ""
+    # Token for the shared SMTP2GO webhook URL (/webhooks/smtp2go/<token>)
+    webhook_token: str = ""
 
     # Automation API (/api/v1 and MCP /mcp), served by the outreach-mcp service
     outreach_api_token: str = ""

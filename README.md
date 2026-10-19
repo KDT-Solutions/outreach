@@ -53,12 +53,17 @@ calls details for places it has not seen before.
 
 ### SMTP2GO webhook
 
-In SMTP2GO, add a webhook for `bounce`, `spam` and `unsubscribe` events pointing to
-the URL shown on the tenant page:
+SMTP2GO webhooks can be restricted per API key or SMTP user, but not per sender
+domain. With one shared API key, add a single webhook (Settings > Webhooks) for
+`bounce`, `spam` and `unsubscribe`, JSON format, pointing to
 
 ```
-https://<PUBLIC_BASE_URL>/webhooks/smtp2go/<tenant-slug>/<webhook-token>
+https://<PUBLIC_BASE_URL>/webhooks/smtp2go/<WEBHOOK_TOKEN>
 ```
+
+The tenant is resolved from the SMTP2GO email id, the Message-ID header or the
+sender address. A per-tenant URL also exists (shown on the tenant page) for
+setups with one API key per tenant.
 
 ## Workflow
 

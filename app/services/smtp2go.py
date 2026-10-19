@@ -74,6 +74,18 @@ def _to_html(text: str) -> str:
 SUPPRESS_EVENTS = {"bounce": "bounce", "spam": "spam", "unsubscribe": "unsubscribe", "reject": "bounce"}
 
 
+def webhook_sender(payload: dict) -> str | None:
+    """The From/envelope sender of the mail an event refers to, lower-cased."""
+    for k in ("sender", "from", "sendername", "mail_from"):
+        v = payload.get(k)
+        if isinstance(v, str) and "@" in v:
+            v = v.strip()
+            if "<" in v and ">" in v:
+                v = v[v.index("<") + 1 : v.index(">")]
+            return v.lower()
+    return None
+
+
 def parse_webhook(payload: dict) -> tuple[str | None, str | None, str | None, str | None]:
     """Return (event, recipient, email_id, message_id) from a webhook payload."""
     event = (payload.get("event") or payload.get("type") or "").lower() or None
@@ -82,6 +94,8 @@ def parse_webhook(payload: dict) -> tuple[str | None, str | None, str | None, st
         rcpt = rcpt[0] if rcpt else None
     email_id = payload.get("email_id") or payload.get("sendid") or payload.get("message-id")
     message_id = payload.get("Message-Id") or payload.get("message_id") or payload.get("message-id")
+    if isinstance(message_id, str) and not message_id.startswith("<"):
+        message_id = f"<{message_id}>"
     if event == "bounce" and str(payload.get("bounce_type", "")).lower().startswith("soft"):
         event = "soft_bounce"
     return event, (rcpt.lower() if isinstance(rcpt, str) else None), email_id, message_id
