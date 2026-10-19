@@ -23,7 +23,14 @@ INSTRUCTIONS = """Outreach: B2B-Mailkampagnen pro Mandant.
 Ablauf: list_tenants -> create_campaign -> import_leads -> set_sequence -> preview_email / send_test -> start_campaign -> get_stats.
 Alle schreibenden Werkzeuge liefern ohne confirm=true nur eine Vorschau und ändern nichts.
 start_campaign braucht zusätzlich confirm_send=true. Schritte sind 1-basiert.
-Platzhalter in Betreff und Text: {{anrede}}, {{vorname}}, {{nachname}}, {{firma}}, {{ort}}, {{email}}. body_text ist Klartext, kein HTML."""
+Platzhalter in Betreff und Text: {{anrede}}, {{vorname}}, {{nachname}}, {{firma}}, {{ort}}, {{email}}. body_text ist Klartext, kein HTML.
+
+Freigabe (auto_approve):
+- auto_approve=false (Standard): Jeder Mailentwurf, auch jedes Follow-up, bekommt Lead-Status "needs_review" und wartet in der Weboberfläche unter /review. Erst nach manueller Freigabe durch Kim (oder POST /api/messages/{id}/approve) wird die Mail terminiert und im Sendefenster verschickt. Ohne Freigabe geht nichts raus, egal wie lange ein Entwurf liegt. Kampagne "active" heisst also nur: Leads werden gesucht, angereichert und Entwürfe geschrieben.
+- auto_approve=true: Entwürfe werden ohne Sichtung sofort als freigegeben gespeichert und im nächsten Sendefenster verschickt. Nur setzen, wenn Kim das ausdrücklich will.
+Lead-Status: new (gefunden) -> enriched (E-Mail gefunden) -> needs_review (Entwurf wartet) -> scheduled (freigegeben, wartet aufs Sendefenster) -> in_sequence (mindestens eine Mail gesendet, weitere Schritte offen) -> finished (alle Schritte gesendet). Abbrüche: replied (Antwort via Zammad erkannt, Sequenz gestoppt), bounced, unsubscribed, stopped, skipped, no_email.
+Sendefenster pro Mandant: standardmässig Mo-Fr 9-17 Uhr, Tageslimit 40, Versand mit Zufallsverzögerung; Follow-ups werden einen Tag vor Fälligkeit als Entwurf vorbereitet.
+Ausgehende Mails werden nicht in Zammad erfasst; Antworten kommen über das Zammad-Postfach des Mandanten herein, stoppen die Sequenz und erhalten eine interne Notiz mit Lead-Link."""
 
 mcp = MCPServer(name="outreach", version=__version__, instructions=INSTRUCTIONS)
 
