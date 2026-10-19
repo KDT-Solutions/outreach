@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -15,8 +16,8 @@ from .. import crypto, pipeline
 from ..auth import COOKIE, check_login, create_session, require_csrf, require_login
 from ..config import get_settings
 from ..db import get_db
-from ..models import LEAD_STATUSES, Campaign, Event, Lead, Message, Suppression, Tenant
-from ..services import scheduling
+from ..models import LEAD_STATUSES, Campaign, Event, Lead, Message, Suppression, Tenant, TenantSignature
+from ..services import scheduling, templating
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -132,6 +133,35 @@ async def tenant_save(request: Request, sess: dict = Depends(require_csrf), db: 
     return _redirect(f"/tenants/{t.id}")
 
 
+@router.post("/tenants/{tenant_id}/signatures")
+async def tenant_signature_save(tenant_id: int, request: Request, sess: dict = Depends(require_csrf), db: Session = Depends(get_db)):
+    f = await request.form()
+    t = db.get(Tenant, tenant_id)
+    if not t:
+        raise HTTPException(404)
+    lang = f.get("language", "").strip().lower()
+    if not re.fullmatch(r"[a-z]{2}", lang):
+        raise HTTPException(400, "Sprache als ISO-639-1-Code, z.B. fr")
+    sig = db.query(TenantSignature).filter_by(tenant_id=t.id, language=lang).one_or_none()
+    if f.get("action") == "delete":
+        if sig:
+            db.delete(sig)
+    else:
+        body = f.get("body_text", "").strip()
+        unsub = " ".join(f.get("unsubscribe_text", "").split())
+        problems = templating.check_template(body + "\n" + unsub, allowed=templating.SIGNATURE_PLACEHOLDERS)
+        if not body or not unsub or problems:
+            raise HTTPException(400, "; ".join(problems) or "Signatur und Abmeldetext sind Pflicht")
+        if sig is None:
+            sig = TenantSignature(tenant_id=t.id, language=lang)
+            db.add(sig)
+        sig.body_text = body
+        sig.unsubscribe_text = unsub
+    pipeline.log_event(db, "signature", f"{t.slug}: Signatur {lang} {'gelöscht' if f.get('action') == 'delete' else 'gespeichert'}", t.id)
+    db.commit()
+    return _redirect(f"/tenants/{t.id}")
+
+
 # ---------------------------------------------------------------- campaigns
 @router.get("/campaigns", response_class=HTMLResponse)
 def campaigns(request: Request, sess: dict = Depends(require_login), db: Session = Depends(get_db)):
@@ -191,6 +221,12 @@ async def campaign_save(request: Request, sess: dict = Depends(require_csrf), db
         ]
     except Exception:
         raise HTTPException(400, "Schritte müssen eine JSON-Liste mit delay_days und instruction sein")
+    for field in ("signature_override", "unsubscribe_text_override"):
+        value = f.get(field, "").strip()
+        problems = templating.check_template(value, allowed=templating.SIGNATURE_PLACEHOLDERS)
+        if problems:
+            raise HTTPException(400, "; ".join(problems))
+        setattr(c, field, value or None)
     if not c.name:
         raise HTTPException(400, "Name fehlt")
     db.add(c)

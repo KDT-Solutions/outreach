@@ -38,7 +38,13 @@ def _ensure_columns() -> None:
             "language": "VARCHAR(10)",
             "deleted_at": "TIMESTAMP WITH TIME ZONE",
         },
-        "campaigns": {"from_name": "VARCHAR(120)", "from_email": "VARCHAR(200)", "reply_to": "VARCHAR(200)"},
+        "campaigns": {
+            "from_name": "VARCHAR(120)",
+            "from_email": "VARCHAR(200)",
+            "reply_to": "VARCHAR(200)",
+            "signature_override": "TEXT",
+            "unsubscribe_text_override": "TEXT",
+        },
     }
     obsolete = {"tenants": ["imap_host", "imap_port", "imap_user", "imap_password_enc", "imap_folder"]}
     insp = inspect(engine)

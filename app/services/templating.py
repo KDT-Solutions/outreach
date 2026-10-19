@@ -21,6 +21,8 @@ PLACEHOLDERS = {
     "email": "email",
 }
 HTML_TAG_RE = re.compile(r"<\s*/?\s*[A-Za-z!][^>]*>")
+# placeholders allowed in signatures (tenant per language or campaign override)
+SIGNATURE_PLACEHOLDERS = ("sender_name", "sender_email", "reply_to", "unsubscribe_url")
 
 
 def is_template_step(step: dict) -> bool:
@@ -31,12 +33,12 @@ def placeholders_in(text: str) -> list[str]:
     return list(dict.fromkeys(PLACEHOLDER_RE.findall(text or "")))
 
 
-def check_template(text: str) -> list[str]:
+def check_template(text: str, allowed=PLACEHOLDERS) -> list[str]:
     """Problems with a template string: unknown placeholders, stray braces, HTML."""
     problems = []
-    unknown = [p for p in placeholders_in(text) if p not in PLACEHOLDERS]
+    unknown = [p for p in placeholders_in(text) if p not in allowed]
     if unknown:
-        problems.append("Unbekannte Platzhalter: " + ", ".join("{{" + u + "}}" for u in unknown) + "; erlaubt: " + ", ".join("{{" + k + "}}" for k in PLACEHOLDERS))
+        problems.append("Unbekannte Platzhalter: " + ", ".join("{{" + u + "}}" for u in unknown) + "; erlaubt: " + ", ".join("{{" + k + "}}" for k in allowed))
     rest = PLACEHOLDER_RE.sub("", text or "")
     if "{{" in rest or "}}" in rest:
         problems.append("Ungültige Platzhalter-Syntax, erwartet {{name}}")

@@ -65,6 +65,25 @@ class Tenant(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     campaigns: Mapped[list[Campaign]] = relationship(back_populates="tenant")
+    signatures: Mapped[list[TenantSignature]] = relationship(back_populates="tenant", order_by="TenantSignature.language")
+
+
+class TenantSignature(Base):
+    """Signature block and unsubscribe line per tenant and language (ISO-639-1)."""
+
+    __tablename__ = "tenant_signatures"
+    __table_args__ = (UniqueConstraint("tenant_id", "language", name="uq_tenant_signature_language"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
+    language: Mapped[str] = mapped_column(String(10))
+    # greeting, name, company line, address; placeholders {{sender_name}} etc.
+    body_text: Mapped[str] = mapped_column(Text, default="")
+    # text in front of the unsubscribe link
+    unsubscribe_text: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    tenant: Mapped[Tenant] = relationship(back_populates="signatures")
 
 
 class Campaign(Base):
@@ -94,6 +113,9 @@ class Campaign(Base):
     from_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     from_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
     reply_to: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Optional signature for this campaign only; empty = tenant signature by language
+    signature_override: Mapped[str | None] = mapped_column(Text, nullable=True)
+    unsubscribe_text_override: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
