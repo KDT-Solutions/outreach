@@ -290,6 +290,7 @@ def generate_batch(db: Session, limit: int) -> int:
     for lead in leads + followups:
         try:
             generate_for_lead(db, lead)
+            lead.last_error = None
             n += 1
         except Exception as exc:
             log.exception("generate lead %s", lead.id)

@@ -63,8 +63,12 @@ def test_json_from_rejects_plain_text():
 def test_retry_once_then_succeed(monkeypatch, ai_lead):
     client = _fake(monkeypatch, ["Mir fehlen Angaben zum Empfänger.", GOOD])
     with SessionLocal() as db:
+        db.get(Lead, ai_lead).last_error = "alter Fehler"
+        db.commit()
         assert pipeline.generate_batch(db, 10) == 1
-        assert db.get(Lead, ai_lead).status == "needs_review"
+        lead = db.get(Lead, ai_lead)
+        assert lead.status == "needs_review"
+        assert lead.last_error is None
     assert len(client.calls) == 2
     # the retry carries the first answer and a corrective instruction
     assert client.calls[1]["messages"][-2]["role"] == "assistant"
