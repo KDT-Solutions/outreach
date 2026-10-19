@@ -25,7 +25,7 @@ from .security import Principal
 log = logging.getLogger(__name__)
 
 # lead statuses that still lead to mails
-ACTIVE_LEAD_STATUSES = ("new", "enriched", "needs_review", "scheduled", "in_sequence")
+ACTIVE_LEAD_STATUSES = ("new", "enriched", "needs_review", "scheduled", "in_sequence", "draft_failed")
 CAMPAIGN_STATUSES = ("draft", "active", "paused", "done")
 # API field -> Lead attribute
 LEAD_FIELDS = {
@@ -498,6 +498,7 @@ def update_lead(db: Session, call: Call, lead_id: int, data: schemas.LeadUpdate)
     if "vorname" in changes or "nachname" in changes:
         lead.contact_name = " ".join(p for p in (lead.first_name, lead.last_name) if p) or None
     pipeline.discard_pending(lead, "Lead geändert (API)")
+    pipeline.reset_generate_failures(db, lead, "Lead geändert (API): " + ", ".join(changes))
     if preview["email_reverified"]:
         domain = lead.email.rsplit("@", 1)[1]
         lead.domain = None if _generic_domain(domain) else domain

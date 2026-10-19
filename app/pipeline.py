@@ -293,9 +293,38 @@ def generate_batch(db: Session, limit: int) -> int:
             n += 1
         except Exception as exc:
             log.exception("generate lead %s", lead.id)
-            lead.last_error = f"{type(exc).__name__}: {exc}"[:500]
+            err = f"{type(exc).__name__}: {exc}"
+            lead.last_error = err[:500]
+            log_event(db, "generate_failed", err, lead.tenant_id, lead.id)
+            db.flush()
+            failures = generate_failures(db, lead.id)
+            if failures >= MAX_GENERATE_FAILURES:
+                # stop retrying every worker cycle; the lead waits for a manual fix
+                lead.status = "draft_failed"
+                log_event(db, "generate_gave_up", f"Nach {failures} Fehlversuchen angehalten", lead.tenant_id, lead.id)
         db.commit()
     return n
+
+
+MAX_GENERATE_FAILURES = 3
+
+
+def generate_failures(db: Session, lead_id: int) -> int:
+    """Failed draft attempts since the lead was last changed (a change resets the count)."""
+    reset_at = db.scalar(
+        select(func.max(Event.created_at)).where(Event.lead_id == lead_id, Event.kind == "lead_reset")
+    )
+    q = select(func.count(Event.id)).where(Event.lead_id == lead_id, Event.kind == "generate_failed")
+    if reset_at is not None:
+        q = q.where(Event.created_at > reset_at)
+    return db.scalar(q) or 0
+
+
+def reset_generate_failures(db: Session, lead: Lead, reason: str) -> None:
+    """Start counting failed attempts from zero and let a parked lead be drafted again."""
+    log_event(db, "lead_reset", reason, lead.tenant_id, lead.id)
+    if lead.status == "draft_failed":
+        lead.status = "enriched"
 
 
 # ---------------------------------------------------------------- sending

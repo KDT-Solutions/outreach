@@ -293,6 +293,7 @@ async def lead_action(lead_id: int, request: Request, sess: dict = Depends(requi
         lead.status = "skipped"
         lead.next_send_at = None
     elif action == "requeue":
+        pipeline.reset_generate_failures(db, lead, "neu anreichern (UI)")
         lead.status = "new"
         lead.email = None
         lead.email_source = None
@@ -308,6 +309,7 @@ async def lead_action(lead_id: int, request: Request, sess: dict = Depends(requi
     elif action == "set_email":
         email = f.get("email", "").strip().lower()
         if email:
+            pipeline.reset_generate_failures(db, lead, "Adresse gesetzt (UI)")
             lead.email = email
             lead.email_source = "manual"
             from ..services import verify
@@ -316,6 +318,7 @@ async def lead_action(lead_id: int, request: Request, sess: dict = Depends(requi
             lead.status = "enriched" if lead.email_mx_ok else "no_email"
             lead.notes = "" if lead.email_mx_ok else f"{email}: kein MX-Eintrag"
     elif action == "generate":
+        pipeline.reset_generate_failures(db, lead, "Entwurf manuell angestossen (UI)")
         try:
             pipeline.generate_for_lead(db, lead)
         except Exception as exc:

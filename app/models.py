@@ -147,6 +147,7 @@ LEAD_STATUSES = (
     "unsubscribed",
     "stopped",      # manually stopped
     "skipped",      # operator skipped
+    "draft_failed", # text generation failed repeatedly, waits for a manual fix
 )
 
 
