@@ -31,6 +31,7 @@ def _ensure_columns() -> None:
         "tenants": {"zammad_last_poll": "TIMESTAMP WITH TIME ZONE"},
         "messages": {"zammad_ticket_id": "INTEGER"},
     }
+    obsolete = {"tenants": ["imap_host", "imap_port", "imap_user", "imap_password_enc", "imap_folder"]}
     insp = inspect(engine)
     with engine.begin() as conn:
         for table, cols in wanted.items():
@@ -38,6 +39,11 @@ def _ensure_columns() -> None:
             for col, ddl in cols.items():
                 if col not in existing:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+        for table, cols in obsolete.items():
+            existing = {c["name"] for c in insp.get_columns(table)}
+            for col in cols:
+                if col in existing:
+                    conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {col}"))
 
 
 def get_db():
