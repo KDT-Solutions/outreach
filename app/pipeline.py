@@ -147,7 +147,7 @@ def enrich_lead(db: Session, lead: Lead) -> None:
         lead.notes = "Keine Webseite bei Google hinterlegt"
         return
 
-    res = crawler.crawl(lead.website)
+    res = crawler.crawl(lead.website, place_hint=lead.address)
     lead.domain = res.domain or lead.domain
     lead.site_excerpt = res.site_excerpt or None
     lead.impressum_excerpt = res.impressum_excerpt or None
