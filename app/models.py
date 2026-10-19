@@ -90,11 +90,22 @@ class Campaign(Base):
     max_leads: Mapped[int] = mapped_column(Integer, default=200)
     sourcing_done: Mapped[bool] = mapped_column(Boolean, default=False)
     sourcing_log: Mapped[str] = mapped_column(Text, default="")
+    # Optional sender identity per campaign; empty = the tenant's
+    from_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    from_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    reply_to: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     tenant: Mapped[Tenant] = relationship(back_populates="campaigns")
     leads: Mapped[list[Lead]] = relationship(back_populates="campaign")
+
+    @property
+    def sender(self) -> tuple[str, str, str]:
+        """(from_name, from_email, reply_to) with the tenant as fallback."""
+        t = self.tenant
+        from_email = self.from_email or t.from_email
+        return self.from_name or t.from_name, from_email, self.reply_to or t.reply_to or from_email
 
     @property
     def query_list(self) -> list[str]:
@@ -138,11 +149,15 @@ class Lead(Base):
     source_query: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     email: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    email_source: Mapped[str | None] = mapped_column(String(30), nullable=True)  # crawler|hunter|manual
+    email_source: Mapped[str | None] = mapped_column(String(30), nullable=True)  # crawler|hunter|manual|import
     email_mx_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # ranked addresses the crawler found, comma-separated (first 10)
     email_candidates: Mapped[str | None] = mapped_column(Text, nullable=True)
     contact_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    first_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     salutation: Mapped[str | None] = mapped_column(String(120), nullable=True)
     # Text the LLM sees: homepage + impressum/kontakt excerpt
     site_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -155,6 +170,8 @@ class Lead(Base):
     unsubscribe_token: Mapped[str] = mapped_column(String(64), default=new_token, unique=True)
     notes: Mapped[str] = mapped_column(Text, default="")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Soft delete (API): hidden from lists, never mailed again
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -223,3 +240,22 @@ class DailyCounter(Base):
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
     day: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD in tenant timezone
     count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ApiAudit(Base):
+    """Every write call through the automation API (REST /api/v1 and MCP), previews included."""
+
+    __tablename__ = "api_audit"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    token_id: Mapped[str] = mapped_column(String(40))
+    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id"), nullable=True, index=True)
+    tool: Mapped[str] = mapped_column(String(60))
+    transport: Mapped[str] = mapped_column(String(10))  # rest | mcp
+    client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # preview | applied | error
+    outcome: Mapped[str] = mapped_column(String(20))
+    # {"campaign_id": 1, "lead_ids": [..]}
+    object_ids: Mapped[dict] = mapped_column(JSON, default=dict)
+    detail: Mapped[str] = mapped_column(Text, default="")

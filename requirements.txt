@@ -13,3 +13,4 @@ dnspython>=2.6
 anthropic>=0.40
 pydantic>=2.8
 pydantic-settings>=2.4
+mcp>=2.3,<3
