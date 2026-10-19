@@ -260,7 +260,15 @@ async def lead_action(lead_id: int, request: Request, sess: dict = Depends(requi
         lead.status = "new"
         lead.email = None
         lead.email_source = None
+        lead.email_candidates = None
+        lead.contact_name = None
+        lead.salutation = None
         lead.last_error = None
+        lead.next_send_at = None
+        for m in lead.messages:
+            if m.direction == "out" and m.status in ("draft", "approved"):
+                m.status = "failed"
+                m.error = "verworfen, Lead neu angereichert"
     elif action == "set_email":
         email = f.get("email", "").strip().lower()
         if email:

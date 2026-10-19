@@ -75,6 +75,7 @@ async def smtp2go_webhook_shared(token: str, request: Request, db: Session = Dep
             if sender:
                 tenant = db.query(Tenant).filter(Tenant.from_email == sender).first()
         if tenant is None:
+            pipeline.log_event(db, "webhook_ignored", f"{event or '?'} rcpt={rcpt or '-'} sender={smtp2go.webhook_sender(e) or '-'} id={email_id or message_id or '-'}")
             results.append("ignored")
             continue
         results.append(pipeline.handle_webhook(db, tenant, e))
