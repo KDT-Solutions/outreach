@@ -50,6 +50,38 @@ services:
       - TZ=${TZ:-Europe/Zurich}
       - WORKER_INTERVAL_SECONDS=${WORKER_INTERVAL_SECONDS:-60}
 
+  # Automation API without browser login: REST under /api/v1, MCP under /mcp.
+  # Route https://<host>/api/v1 and https://<host>/mcp to this port in the reverse proxy.
+  outreach-mcp:
+    image: ghcr.io/kdt-solutions/outreach:latest
+    pull_policy: always
+    container_name: outreach-mcp
+    restart: unless-stopped
+    command: ["uvicorn", "app.api_server:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+psycopg://outreach:${POSTGRES_PASSWORD}@db:5432/outreach
+      - SECRET_KEY=${SECRET_KEY}
+      - DATA_ENCRYPTION_KEY=${DATA_ENCRYPTION_KEY}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - SMTP2GO_API_KEY=${SMTP2GO_API_KEY:-}
+      - TZ=${TZ:-Europe/Zurich}
+      # set as a stack variable (Portainer) or in .env, never in the repo
+      - OUTREACH_API_TOKEN=${OUTREACH_API_TOKEN}
+      - OUTREACH_API_TENANTS=${OUTREACH_API_TENANTS}
+      - OUTREACH_API_ALLOW_IPS=${OUTREACH_API_ALLOW_IPS:-}
+      - OUTREACH_API_RATE_LIMIT=${OUTREACH_API_RATE_LIMIT:-60}
+      - OUTREACH_TEST_ALLOW_DOMAINS=${OUTREACH_TEST_ALLOW_DOMAINS:-}
+      - OUTREACH_MCP_ALLOWED_HOSTS=${OUTREACH_MCP_ALLOWED_HOSTS:-}
+      # which proxies may set X-Forwarded-For/-Proto; use the proxy's IP when the IP allowlist is on
+      - FORWARDED_ALLOW_IPS=${MCP_FORWARDED_ALLOW_IPS:-*}
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${MCP_HOST_PORT:-8430}:8000"
+
   db:
     image: postgres:16-alpine
     container_name: outreach-db

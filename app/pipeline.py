@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from . import crypto
 from .config import get_settings
 from .models import Campaign, Event, Lead, Message, Suppression, Tenant
-from .services import crawler, hunter, llm, places, scheduling, smtp2go, verify, zammad
+from .services import crawler, hunter, llm, places, scheduling, smtp2go, templating, verify, zammad
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +46,22 @@ def suppress(db: Session, tenant_id: int, value: str, reason: str) -> None:
                 if m.direction == "out" and m.status in ("draft", "approved"):
                     m.status = "failed"
                     m.error = f"suppressed: {reason}"
+
+
+def discard_pending(lead: Lead, reason: str) -> int:
+    """Drop unsent drafts/approved mails of a lead so the worker writes them again.
+    Returns the number of discarded messages."""
+    n = 0
+    for m in lead.messages:
+        if m.direction == "out" and m.status in ("draft", "approved"):
+            m.status = "failed"
+            m.error = reason
+            n += 1
+    if n and lead.status in ("needs_review", "scheduled"):
+        lead.status = "enriched" if lead.step == 0 else "in_sequence"
+        if lead.step == 0:
+            lead.next_send_at = None
+    return n
 
 
 # ---------------------------------------------------------------- sourcing
@@ -116,6 +132,15 @@ def enrich_lead(db: Session, lead: Lead) -> None:
     if is_suppressed(db, lead.tenant_id, lead.email):
         lead.status = "stopped"
         lead.notes = "Adresse auf Sperrliste"
+        return
+    if lead.email_source == "import" and lead.email:
+        # imported with a known address: nothing to crawl, only the MX check
+        lead.email_mx_ok = verify.check(lead.email)
+        if not lead.email_mx_ok:
+            lead.status = "no_email"
+            lead.last_error = f"{lead.email}: kein MX-Eintrag"
+            return
+        lead.status = "enriched"
         return
     if not lead.website:
         lead.status = "no_email"
@@ -191,6 +216,8 @@ def generate_for_lead(db: Session, lead: Lead) -> Message | None:
     for m in lead.messages:
         if m.direction == "out" and m.step == lead.step and m.status in ("draft", "approved"):
             return m
+    if templating.is_template_step(steps[lead.step]):
+        return _render_for_lead(db, lead, steps[lead.step])
     previous = [(m.subject, m.body) for m in lead.messages if m.direction == "out" and m.status == "sent"]
     draft = llm.write_mail(tenant, campaign, lead, lead.step, previous)
     if draft.contact_name and not lead.contact_name:
@@ -213,6 +240,28 @@ def generate_for_lead(db: Session, lead: Lead) -> Message | None:
     else:
         msg.status = "draft"
         lead.status = "needs_review"
+    db.add(msg)
+    return msg
+
+
+def _render_for_lead(db: Session, lead: Lead, step: dict) -> Message:
+    """Fixed-text step: fill the placeholders. A placeholder without a value always
+    sends the mail to the review queue, even with auto-approve."""
+    campaign = lead.campaign
+    tenant = campaign.tenant
+    subject, body, missing = templating.render_step(step, lead)
+    msg = Message(lead_id=lead.id, tenant_id=tenant.id, direction="out", step=lead.step, subject=subject[:300], body=body)
+    if campaign.auto_approve and not missing:
+        msg.status = "approved"
+        msg.approved_at = datetime.now(timezone.utc)
+        lead.status = "scheduled" if lead.step == 0 else "in_sequence"
+        if lead.next_send_at is None:
+            lead.next_send_at = scheduling.schedule_after(tenant, 0)
+    else:
+        msg.status = "draft"
+        lead.status = "needs_review"
+        if missing:
+            log_event(db, "template_missing", "Leere Platzhalter: " + ", ".join(missing), tenant.id, lead.id)
     db.add(msg)
     return msg
 
@@ -301,8 +350,9 @@ def send_due(db: Session, limit: int) -> int:
                 db.commit()
                 continue
             try:
-                body = _compose_body(tenant, lead, msg.body)
-                sender = f"{tenant.from_name} <{tenant.from_email}>"
+                body = compose_body(tenant, lead, msg.body)
+                from_name, from_email, reply_to = lead.campaign.sender
+                sender = f"{from_name} <{from_email}>"
                 unsubscribe_url = f"{s.public_base_url.rstrip('/')}/u/{lead.unsubscribe_token}"
                 provider_id, message_id = smtp2go.send(
                     api_key=api_key,
@@ -310,10 +360,10 @@ def send_due(db: Session, limit: int) -> int:
                     to=lead.email,
                     subject=msg.subject,
                     text_body=body,
-                    reply_to=tenant.reply_to or tenant.from_email,
+                    reply_to=reply_to,
                     unsubscribe_url=unsubscribe_url,
-                    unsubscribe_mailto=tenant.reply_to or tenant.from_email,
-                    sender_domain=tenant.from_email.rsplit("@", 1)[-1],
+                    unsubscribe_mailto=reply_to,
+                    sender_domain=from_email.rsplit("@", 1)[-1],
                 )
                 msg.status = "sent"
                 msg.sent_at = now
@@ -343,7 +393,7 @@ def send_due(db: Session, limit: int) -> int:
     return sent
 
 
-def _compose_body(tenant: Tenant, lead: Lead, body: str) -> str:
+def compose_body(tenant: Tenant, lead: Lead, body: str) -> str:
     s = get_settings()
     unsubscribe_url = f"{s.public_base_url.rstrip('/')}/u/{lead.unsubscribe_token}"
     parts = [body.strip()]

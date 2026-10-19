@@ -23,6 +23,22 @@ class Settings(BaseSettings):
     # Token for the shared SMTP2GO webhook URL (/webhooks/smtp2go/<token>)
     webhook_token: str = ""
 
+    # Automation API (/api/v1 and MCP /mcp), served by the outreach-mcp service
+    outreach_api_token: str = ""
+    # alternative: path to a file holding the token (Docker secret)
+    outreach_api_token_file: str = ""
+    # comma-separated tenant slugs the token may access, "*" = all, empty = none
+    outreach_api_tenants: str = ""
+    # comma-separated IPs or CIDRs, empty = all
+    outreach_api_allow_ips: str = ""
+    outreach_api_rate_limit: int = 60  # requests per minute and token
+    # reject requests that did not arrive over HTTPS (X-Forwarded-Proto from the proxy)
+    outreach_api_require_https: bool = True
+    # comma-separated Host header values the MCP endpoint accepts; default: host of PUBLIC_BASE_URL
+    outreach_mcp_allowed_hosts: str = ""
+    # comma-separated domains send_test may send to; empty = send_test disabled
+    outreach_test_allow_domains: str = ""
+
     tz: str = "Europe/Zurich"
     worker_interval_seconds: int = 60
 

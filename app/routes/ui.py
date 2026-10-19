@@ -183,7 +183,12 @@ async def campaign_save(request: Request, sess: dict = Depends(require_csrf), db
     try:
         steps = json.loads(f.get("steps", "[]"))
         assert isinstance(steps, list) and steps
-        c.steps = [{"delay_days": int(s.get("delay_days", 0)), "instruction": str(s.get("instruction", ""))} for s in steps]
+        # fixed-text steps (set via the API) keep subject and body_text
+        c.steps = [
+            {"delay_days": int(s.get("delay_days", 0)), "instruction": str(s.get("instruction", ""))}
+            | ({"subject": str(s.get("subject", "")), "body_text": str(s["body_text"])} if s.get("body_text") else {})
+            for s in steps
+        ]
     except Exception:
         raise HTTPException(400, "Schritte müssen eine JSON-Liste mit delay_days und instruction sein")
     if not c.name:
@@ -212,7 +217,7 @@ async def campaign_status(campaign_id: int, request: Request, sess: dict = Depen
 # ---------------------------------------------------------------- leads
 @router.get("/leads", response_class=HTMLResponse)
 def leads(request: Request, campaign: int | None = None, status: str | None = None, q: str | None = None, sess: dict = Depends(require_login), db: Session = Depends(get_db)):
-    query = db.query(Lead)
+    query = db.query(Lead).filter(Lead.deleted_at.is_(None))
     if campaign:
         query = query.filter(Lead.campaign_id == campaign)
     if status:
