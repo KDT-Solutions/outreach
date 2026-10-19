@@ -20,6 +20,7 @@ services:
       - GOOGLE_PLACES_API_KEY=${GOOGLE_PLACES_API_KEY}
       - HUNTER_API_KEY=${HUNTER_API_KEY:-}
       - SMTP2GO_API_KEY=${SMTP2GO_API_KEY:-}
+      - WEBHOOK_TOKEN=${WEBHOOK_TOKEN:-}
       - TZ=${TZ:-Europe/Zurich}
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${HOST_PORT:-8429}:8000"

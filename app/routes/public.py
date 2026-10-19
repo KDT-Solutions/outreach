@@ -47,11 +47,42 @@ def unsubscribe_post(token: str, db: Session = Depends(get_db)):
     return unsubscribe_get(token, db)
 
 
-@router.post("/webhooks/smtp2go/{tenant_slug}/{token}")
-async def smtp2go_webhook(tenant_slug: str, token: str, request: Request, db: Session = Depends(get_db)):
-    tenant = db.query(Tenant).filter(Tenant.slug == tenant_slug).one_or_none()
-    if tenant is None or not hmac.compare_digest(token, tenant.webhook_token):
+@router.post("/webhooks/smtp2go/{token}")
+async def smtp2go_webhook_shared(token: str, request: Request, db: Session = Depends(get_db)):
+    """One webhook for all tenants: the tenant is found via the SMTP2GO email id,
+    the Message-ID header, or the sender address."""
+    from ..config import get_settings
+    from ..models import Message
+    from ..services import smtp2go
+
+    expected = get_settings().webhook_token
+    if not expected or not hmac.compare_digest(token, expected):
         raise HTTPException(404)
+    payload = await _payload(request)
+    results = []
+    for e in payload:
+        event, rcpt, email_id, message_id = smtp2go.parse_webhook(e)
+        tenant = None
+        msg = None
+        if email_id:
+            msg = db.query(Message).filter(Message.provider_id == str(email_id)).first()
+        if msg is None and message_id:
+            msg = db.query(Message).filter(Message.message_id_header == message_id).first()
+        if msg is not None:
+            tenant = db.get(Tenant, msg.tenant_id)
+        if tenant is None:
+            sender = smtp2go.webhook_sender(e)
+            if sender:
+                tenant = db.query(Tenant).filter(Tenant.from_email == sender).first()
+        if tenant is None:
+            results.append("ignored")
+            continue
+        results.append(pipeline.handle_webhook(db, tenant, e))
+    db.commit()
+    return {"handled": sum(1 for r in results if r != "ignored"), "ignored": results.count("ignored")}
+
+
+async def _payload(request: Request) -> list[dict]:
     ctype = request.headers.get("content-type", "")
     if "json" in ctype:
         payload = await request.json()
@@ -59,6 +90,14 @@ async def smtp2go_webhook(tenant_slug: str, token: str, request: Request, db: Se
         form = await request.form()
         payload = {k: v for k, v in form.items()}
     events = payload if isinstance(payload, list) else [payload]
-    results = [pipeline.handle_webhook(db, tenant, e) for e in events if isinstance(e, dict)]
+    return [e for e in events if isinstance(e, dict)]
+
+
+@router.post("/webhooks/smtp2go/{tenant_slug}/{token}")
+async def smtp2go_webhook(tenant_slug: str, token: str, request: Request, db: Session = Depends(get_db)):
+    tenant = db.query(Tenant).filter(Tenant.slug == tenant_slug).one_or_none()
+    if tenant is None or not hmac.compare_digest(token, tenant.webhook_token):
+        raise HTTPException(404)
+    results = [pipeline.handle_webhook(db, tenant, e) for e in await _payload(request)]
     db.commit()
     return {"handled": len(results)}

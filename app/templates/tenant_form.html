@@ -36,7 +36,8 @@
 <div><label>Zeitzone</label><input type="text" name="timezone" value="{{ t.timezone if t else 'Europe/Zurich' }}"></div>
 </div>
 <div class="check"><input type="checkbox" name="send_weekdays_only" id="wd" {{ 'checked' if (t.send_weekdays_only if t else True) }}><label for="wd" style="margin:0">Nur Montag bis Freitag</label></div>
-{% if t %}<p class="small muted">Webhook-URL für SMTP2GO (Bounce, Spam, Unsubscribe): <code>{{ settings.public_base_url }}/webhooks/smtp2go/{{ t.slug }}/{{ t.webhook_token }}</code></p>{% endif %}
+{% if settings.webhook_token %}<p class="small muted">Gemeinsame SMTP2GO-Webhook-URL für alle Mandanten (Events bounce, spam, unsubscribe, Format JSON): <code>{{ settings.public_base_url }}/webhooks/smtp2go/{{ settings.webhook_token }}</code></p>{% endif %}
+{% if t %}<p class="small muted">Nur dieser Mandant (falls SMTP2GO einen eigenen Key/User pro Mandant hat): <code>{{ settings.public_base_url }}/webhooks/smtp2go/{{ t.slug }}/{{ t.webhook_token }}</code></p>{% endif %}
 </div>
 
 <div class="card">
