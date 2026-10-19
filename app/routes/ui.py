@@ -72,7 +72,7 @@ def dashboard(request: Request, sess: dict = Depends(require_login), db: Session
                 "drafts": drafts,
                 "sent_today": scheduling.sent_today(db, t),
                 "in_window": scheduling.in_window(t),
-                "has_key": bool(t.smtp2go_api_key_enc),
+                "has_key": bool(t.smtp2go_api_key_enc or get_settings().smtp2go_api_key),
             }
         )
     events = db.query(Event).order_by(Event.id.desc()).limit(25).all()

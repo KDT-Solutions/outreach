@@ -1,7 +1,7 @@
 services:
   app:
-    build: .
-    image: outreach-app:latest
+    image: ghcr.io/kdt-solutions/outreach:latest
+    pull_policy: always
     container_name: outreach-app
     restart: unless-stopped
     depends_on:
@@ -19,13 +19,14 @@ services:
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-5-5}
       - GOOGLE_PLACES_API_KEY=${GOOGLE_PLACES_API_KEY}
       - HUNTER_API_KEY=${HUNTER_API_KEY:-}
+      - SMTP2GO_API_KEY=${SMTP2GO_API_KEY:-}
       - TZ=${TZ:-Europe/Zurich}
     ports:
       - "${HOST_PORT:-8427}:8000"
 
   worker:
-    build: .
-    image: outreach-app:latest
+    image: ghcr.io/kdt-solutions/outreach:latest
+    pull_policy: always
     container_name: outreach-worker
     restart: unless-stopped
     command: ["python", "-m", "app.worker"]
@@ -44,6 +45,7 @@ services:
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-5-5}
       - GOOGLE_PLACES_API_KEY=${GOOGLE_PLACES_API_KEY}
       - HUNTER_API_KEY=${HUNTER_API_KEY:-}
+      - SMTP2GO_API_KEY=${SMTP2GO_API_KEY:-}
       - TZ=${TZ:-Europe/Zurich}
       - WORKER_INTERVAL_SECONDS=${WORKER_INTERVAL_SECONDS:-60}
 

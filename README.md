@@ -23,7 +23,7 @@ containers: `app`, `worker`, `db`.
 
 ```
 cp .env.example .env   # fill in the values
-docker compose up -d --build
+docker compose up -d   # image comes from ghcr.io, built by the GitHub Actions workflow
 ```
 
 The UI listens on `HOST_PORT` (default 8427). Put a reverse proxy with TLS in
@@ -44,7 +44,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 | Google Cloud project with **Places API (New)** enabled, API key restricted to that API | Lead sourcing | `GOOGLE_PLACES_API_KEY` |
 | Anthropic API key | Copywriting, reply classification | `ANTHROPIC_API_KEY` |
 | Hunter.io API key (optional, free plan is enough) | E-mail fallback | `HUNTER_API_KEY` |
-| SMTP2GO API key per tenant, sending domain verified (SPF/DKIM) | Sending | Tenant settings in the UI |
+| SMTP2GO API key, sending domains verified (SPF/DKIM) | Sending | `SMTP2GO_API_KEY` globally, or per tenant in the UI (tenant key wins) |
 | IMAP credentials of the reply mailbox (optional) | Reply detection | Tenant settings |
 | Zammad URL + API token (optional) | Ticket on reply | Tenant settings |
 

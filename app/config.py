@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-5-5"
     google_places_api_key: str = ""
     hunter_api_key: str = ""
+    # Global SMTP2GO key, used when a tenant has none of its own
+    smtp2go_api_key: str = ""
 
     tz: str = "Europe/Zurich"
     worker_interval_seconds: int = 60
@@ -25,7 +27,7 @@ class Settings(BaseSettings):
     # crawler
     crawl_timeout: float = 12.0
     crawl_max_bytes: int = 1_500_000
-    crawl_user_agent: str = "Mozilla/5.0 (compatible; OutreachBot/0.1; +https://tabside.ch)"
+    crawl_user_agent: str = "Mozilla/5.0 (compatible; OutreachBot/0.1; +https://example.com)"
 
     # batch sizes per worker tick
     enrich_batch: int = 15

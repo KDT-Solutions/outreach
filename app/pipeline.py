@@ -261,7 +261,7 @@ def send_due(db: Session, limit: int) -> int:
     for tenant in tenants:
         if not scheduling.in_window(tenant):
             continue
-        api_key = crypto.decrypt(tenant.smtp2go_api_key_enc)
+        api_key = crypto.decrypt(tenant.smtp2go_api_key_enc) or s.smtp2go_api_key
         if not api_key:
             continue
         remaining = tenant.daily_limit - scheduling.sent_today(db, tenant)
