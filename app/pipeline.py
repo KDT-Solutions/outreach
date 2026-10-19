@@ -375,8 +375,11 @@ def poll_replies(db: Session) -> int:
             tid = t.get("id")
             if not tid or db.query(Message.id).filter(Message.zammad_ticket_id == tid).first():
                 continue
-            cust = t.get("customer") if isinstance(t.get("customer"), dict) else None
-            from_email = ((cust or {}).get("email") or t.get("customer_email") or "").lower()
+            cust = t.get("customer")
+            if isinstance(cust, dict):
+                from_email = (cust.get("email") or "").lower()
+            else:
+                from_email = (str(cust or "") if "@" in str(cust or "") else t.get("customer_email") or "").lower()
             lead = _match_lead(db, tenant, from_email)
             if lead is None:
                 continue

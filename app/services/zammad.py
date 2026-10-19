@@ -44,8 +44,13 @@ def _headers(token: str) -> dict:
 
 
 def recent_tickets(url: str, token: str, since_iso: str, group: str | None = None, limit: int = 100) -> list[dict]:
-    """Tickets created after since_iso (UTC, e.g. 2026-10-19T12:00:00Z), expanded with customer email."""
-    q = f"created_at:>{since_iso}"
+    """Tickets created after since_iso (UTC, e.g. 2026-10-19T12:00:00Z), expanded.
+
+    Zammad's search only takes a date in the range query, so we search from the day
+    before and filter the exact timestamp client-side. With expand=true, "customer"
+    is the customer's e-mail as a plain string."""
+    day = since_iso[:10]
+    q = f"created_at:>={day}"
     if group:
         q += f' AND group.name:"{group}"'
     with httpx.Client(timeout=30) as client:
@@ -58,7 +63,8 @@ def recent_tickets(url: str, token: str, since_iso: str, group: str | None = Non
             log.warning("Zammad search %s: %s", r.status_code, r.text[:300])
             return []
         data = r.json()
-        return data if isinstance(data, list) else data.get("tickets", []) or []
+        tickets = data if isinstance(data, list) else data.get("tickets", []) or []
+        return [t for t in tickets if (t.get("created_at") or "") > since_iso.replace("Z", "")]
 
 
 def first_article(url: str, token: str, ticket_id: int) -> dict | None:
