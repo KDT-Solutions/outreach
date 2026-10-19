@@ -148,6 +148,12 @@ Fehler sind immer JSON:
 | `send_test` | `POST /api/v1/campaigns/{id}/send-test` |
 | `start_campaign` / `pause_campaign` / `stop_campaign` | `POST /api/v1/campaigns/{id}/start` / `pause` / `stop` |
 | `get_stats` | `GET /api/v1/campaigns/{id}/stats` |
+| `update_campaign` | `PATCH /api/v1/campaigns/{id}` |
+| `list_drafts` | `GET /api/v1/campaigns/{id}/drafts?status=draft` |
+| `approve_drafts` | `POST /api/v1/campaigns/{id}/drafts/approve` |
+| `reject_draft` | `POST /api/v1/drafts/{draft_id}/reject` |
+| `list_tenant_signatures` | `GET /api/v1/tenants/{slug}/signatures` |
+| `set_tenant_signature` | `PUT /api/v1/tenants/{slug}/signatures/{sprache}` |
 
 Regeln:
 
@@ -166,6 +172,33 @@ Regeln:
 - `auto_approve` beim Anlegen der Kampagne entscheidet, ob gerenderte Mails ohne Freigabe in der
   Oberfläche gesendet werden (Standard: nein).
 - Antworten in `get_stats` stammen aus dem Zammad-Abgleich des Workers (`replies_source.last_poll`).
+
+### Signaturen pro Sprache und Kampagne
+
+Unter jede Mail kommen Signatur und Abmeldelink. Signatur und Abmeldetext werden getrennt
+in dieser Reihenfolge bestimmt:
+
+1. Override der Kampagne (`signature_override`, `unsubscribe_text_override`; in der Oberfläche
+   auf der Kampagnenseite, per API bei `create_campaign` oder `set_sequence`, `""` entfernt ihn)
+2. Signatur des Mandanten in der Sprache des Leads (`sprache` beim Import)
+3. Signatur des Mandanten in der Kampagnensprache
+4. Signatur und Fusszeile aus den Mandanteneinstellungen mit dem deutschen Standard-Abmeldetext
+
+Signaturen pro Sprache pflegt man in der Oberfläche auf der Mandantenseite oder mit
+`set_tenant_signature`. Erlaubte Platzhalter: `{{sender_name}}`, `{{sender_email}}`,
+`{{reply_to}}`, `{{unsubscribe_url}}`. Steht `{{unsubscribe_url}}` nicht in der Signatur, wird
+`<Abmeldetext> <Link>` angehängt, der Abmeldelink fehlt also nie. `preview_email` zeigt die
+aufgelöste Signatur und ihre Quelle (`signature.source`, z.B. `tenant:fr`).
+
+### Freigabe über die API
+
+- `list_drafts` liefert die wartenden Entwürfe mit Lead, Schritt, Betreff und fertigem Text
+  (inklusive Signatur).
+- `approve_drafts` gibt Entwürfe frei, entweder `lead_ids` oder `all: true`. Freigegebene Mails
+  gehen im nächsten Sendefenster raus, sofern die Kampagne aktiv ist.
+- `reject_draft` verwirft einen Entwurf; der Lead wird auf `skipped` gesetzt.
+- `update_campaign` ändert Name, Absender, Reply-To und `auto_approve`. Wird `auto_approve` auf
+  `true` gesetzt, werden alle wartenden Entwürfe sofort mit freigegeben; die Vorschau listet sie auf.
 
 ### Beispiele mit curl
 
@@ -193,6 +226,18 @@ curl -sS -X PUT "$API/campaigns/12/sequence" -H "$AUTH" -H "Content-Type: applic
 
 # Fertige Mail für Lead 345, Schritt 1, ohne Versand
 curl -sS "$API/campaigns/12/preview?lead_id=345&step=1" -H "$AUTH"
+
+# Französische Signatur für den Mandanten
+curl -sS -X PUT "$API/tenants/<slug>/signatures/fr" -H "$AUTH" -H "Content-Type: application/json" -d '{
+  "body_text": "Meilleures salutations\n\n{{sender_name}}\nMuster SA\nRue Exemple 1, 1000 Lausanne",
+  "unsubscribe_text": "Vous ne souhaitez plus recevoir nos e-mails ? Désinscription ici :",
+  "confirm": true
+}'
+
+# Wartende Entwürfe ansehen und zwei davon freigeben
+curl -sS "$API/campaigns/12/drafts" -H "$AUTH"
+curl -sS -X POST "$API/campaigns/12/drafts/approve" -H "$AUTH" -H "Content-Type: application/json" \
+  -d '{"lead_ids": [345, 346], "confirm": true}'
 
 # Starten: Vorschau, dann mit beiden Bestätigungen
 curl -sS -X POST "$API/campaigns/12/start" -H "$AUTH" -H "Content-Type: application/json" -d '{}'

@@ -37,6 +37,7 @@ def test_mcp_lists_all_tools(client):
     assert tools == {
         "list_tenants", "list_campaigns", "get_campaign", "create_campaign", "import_leads", "list_leads", "update_lead",
         "delete_lead", "set_sequence", "preview_email", "send_test", "start_campaign", "pause_campaign", "stop_campaign", "get_stats",
+        "list_tenant_signatures", "set_tenant_signature", "update_campaign", "list_drafts", "approve_drafts", "reject_draft",
     }
 
 
@@ -76,3 +77,22 @@ def test_mcp_start_needs_confirm_send(client, db_data):
     assert err and body["error"]["code"] == "confirm_send_required"
     err, body = call(client, "start_campaign", campaign_id=cid, confirm=True, confirm_send=True)
     assert not err and body["campaign"]["status"] == "active"
+
+
+def test_mcp_approve_drafts_preview_and_foreign(client, db_data):
+    from app.models import Message
+
+    cid = db_data["campaign_alpha"]
+    err, body = call(client, "import_leads", campaign_id=cid, leads=[{"firma": "A AG", "email": "a@a.ch"}], confirm=True)
+    lead_id = body["created"][0]["lead_id"]
+    with SessionLocal() as db:
+        lead = db.get(Lead, lead_id)
+        lead.status = "needs_review"
+        db.add(Message(lead_id=lead_id, tenant_id=lead.tenant_id, direction="out", step=0, subject="s", body="b", status="draft"))
+        db.commit()
+    err, body = call(client, "approve_drafts", campaign_id=cid, all=True)
+    assert not err and body["confirmed"] is False and len(body["preview"]["would_approve"]) == 1
+    err, body = call(client, "approve_drafts", campaign_id=cid, all=True, confirm=True)
+    assert not err and len(body["approved"]) == 1
+    err, body = call(client, "list_drafts", campaign_id=db_data["campaign_beta"])
+    assert err and body["error"]["code"] == "not_found"

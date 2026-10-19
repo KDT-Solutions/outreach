@@ -44,6 +44,10 @@
 <input type="text" name="tone" value="{{ c.tone if c else '' }}">
 <label>Sequenz <span class="hint">JSON-Liste; delay_days zählt ab dem vorherigen Versand</span></label>
 <textarea name="steps" class="mono" rows="9">{{ steps_json }}</textarea>
+<label>Signatur nur für diese Kampagne <span class="hint">optional; leer = Signatur des Mandanten in der Sprache des Leads bzw. der Kampagne</span></label>
+<textarea name="signature_override" rows="5">{{ c.signature_override or '' if c else '' }}</textarea>
+<label>Abmeldetext nur für diese Kampagne <span class="hint">optional</span></label>
+<input type="text" name="unsubscribe_text_override" value="{{ c.unsubscribe_text_override or '' if c else '' }}">
 <div class="check"><input type="checkbox" name="auto_approve" id="aa" {{ 'checked' if c and c.auto_approve }}><label for="aa" style="margin:0">Entwürfe automatisch freigeben (ohne manuelle Prüfung senden)</label></div>
 </div>
 <div class="actions"><button>Speichern</button> <a class="btn secondary" href="/campaigns">Zurück</a></div>

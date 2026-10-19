@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import partial
 
 from fastapi import APIRouter, Query, Request
+from pydantic import ValidationError
 
 from . import schemas, service
 from .service import Call
@@ -95,3 +96,38 @@ def pause_campaign(request: Request, campaign_id: int, body: schemas.Confirm):
 @router.post("/campaigns/{campaign_id}/stop", summary="stop_campaign")
 def stop_campaign(request: Request, campaign_id: int, body: schemas.Confirm):
     return _run(request, "stop_campaign", partial(service.stop_campaign, campaign_id=campaign_id, data=body), write=True)
+
+
+# ---------------------------------------------------------------- signatures, campaign settings, approval
+@router.get("/tenants/{tenant}/signatures", summary="list_tenant_signatures")
+def list_tenant_signatures(request: Request, tenant: str):
+    return _run(request, "list_tenant_signatures", partial(service.list_tenant_signatures, tenant=tenant))
+
+
+@router.put("/tenants/{tenant}/signatures/{language}", summary="set_tenant_signature")
+def set_tenant_signature(request: Request, tenant: str, language: str, body: schemas.SignatureBody):
+    try:
+        data = schemas.TenantSignatureSet(tenant=tenant, language=language, **body.model_dump())
+    except ValidationError as exc:
+        raise service.ApiError(422, "validation_error", "Ungültige Eingabe", schemas.validation_details(exc))
+    return _run(request, "set_tenant_signature", partial(service.set_tenant_signature, data=data), write=True)
+
+
+@router.patch("/campaigns/{campaign_id}", summary="update_campaign")
+def update_campaign(request: Request, campaign_id: int, body: schemas.CampaignUpdate):
+    return _run(request, "update_campaign", partial(service.update_campaign, campaign_id=campaign_id, data=body), write=True)
+
+
+@router.get("/campaigns/{campaign_id}/drafts", summary="list_drafts")
+def list_drafts(request: Request, campaign_id: int, status: str = "draft"):
+    return _run(request, "list_drafts", partial(service.list_drafts, campaign_id=campaign_id, status=status))
+
+
+@router.post("/campaigns/{campaign_id}/drafts/approve", summary="approve_drafts")
+def approve_drafts(request: Request, campaign_id: int, body: schemas.ApproveDrafts):
+    return _run(request, "approve_drafts", partial(service.approve_drafts, campaign_id=campaign_id, data=body), write=True)
+
+
+@router.post("/drafts/{draft_id}/reject", summary="reject_draft")
+def reject_draft(request: Request, draft_id: int, body: schemas.Confirm):
+    return _run(request, "reject_draft", partial(service.reject_draft, draft_id=draft_id, data=body), write=True)

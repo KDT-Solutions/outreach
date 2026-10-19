@@ -24,9 +24,11 @@ Ablauf: list_tenants -> create_campaign -> import_leads -> set_sequence -> previ
 Alle schreibenden Werkzeuge liefern ohne confirm=true nur eine Vorschau und ändern nichts.
 start_campaign braucht zusätzlich confirm_send=true. Schritte sind 1-basiert.
 Platzhalter in Betreff und Text: {{anrede}}, {{vorname}}, {{nachname}}, {{firma}}, {{ort}}, {{email}}. body_text ist Klartext, kein HTML.
+Signatur: Kampagnen-Override > Mandantensignatur in der Sprache des Leads > in der Kampagnensprache > Standardsignatur; gleiches für den Abmeldetext. Platzhalter in Signaturen: {{sender_name}}, {{sender_email}}, {{reply_to}}, {{unsubscribe_url}}.
+Freigabe per API: list_drafts zeigt wartende Entwürfe, approve_drafts gibt sie frei, reject_draft verwirft einen.
 
 Freigabe (auto_approve):
-- auto_approve=false (Standard): Jeder Mailentwurf, auch jedes Follow-up, bekommt Lead-Status "needs_review" und wartet in der Weboberfläche unter /review. Erst nach manueller Freigabe durch Kim (oder POST /api/messages/{id}/approve) wird die Mail terminiert und im Sendefenster verschickt. Ohne Freigabe geht nichts raus, egal wie lange ein Entwurf liegt. Kampagne "active" heisst also nur: Leads werden gesucht, angereichert und Entwürfe geschrieben.
+- auto_approve=false (Standard): Jeder Mailentwurf, auch jedes Follow-up, bekommt Lead-Status "needs_review" und wartet in der Weboberfläche unter /review. Erst nach Freigabe durch Kim (Weboberfläche oder approve_drafts) wird die Mail terminiert und im Sendefenster verschickt. Ohne Freigabe geht nichts raus, egal wie lange ein Entwurf liegt. Kampagne "active" heisst also nur: Leads werden gesucht, angereichert und Entwürfe geschrieben.
 - auto_approve=true: Entwürfe werden ohne Sichtung sofort als freigegeben gespeichert und im nächsten Sendefenster verschickt. Nur setzen, wenn Kim das ausdrücklich will.
 Lead-Status: new (gefunden) -> enriched (E-Mail gefunden) -> needs_review (Entwurf wartet) -> scheduled (freigegeben, wartet aufs Sendefenster) -> in_sequence (mindestens eine Mail gesendet, weitere Schritte offen) -> finished (alle Schritte gesendet). Abbrüche: replied (Antwort via Zammad erkannt, Sequenz gestoppt), bounced, unsubscribed, stopped, skipped, no_email.
 Sendefenster pro Mandant: standardmässig Mo-Fr 9-17 Uhr, Tageslimit 40, Versand mit Zufallsverzögerung; Follow-ups werden einen Tag vor Fälligkeit als Entwurf vorbereitet.
@@ -77,6 +79,10 @@ class LeadArg(BaseModel):
     sprache: str | None = Field(None, description="ISO-639-1, z.B. de")
 
 
+SignatureArg = Annotated[str | None, Field(description="Signatur nur für diese Kampagne (Klartext); Platzhalter {{sender_name}} {{sender_email}} {{reply_to}} {{unsubscribe_url}}; leerer String entfernt den Override")]
+UnsubscribeArg = Annotated[str | None, Field(description="Text vor dem Abmeldelink nur für diese Kampagne; leerer String entfernt den Override")]
+
+
 class StepArg(BaseModel):
     model_config = ConfigDict(extra="allow")
     subject: str
@@ -109,10 +115,13 @@ def create_campaign(
     tenant: str | None = None,
     language: str = "de",
     auto_approve: bool = False,
+    signature_override: SignatureArg = None,
+    unsubscribe_text_override: UnsubscribeArg = None,
     confirm: Confirm = False,
 ) -> dict:
     data = _model(schemas.CampaignCreate, tenant=tenant, name=name, reply_to=reply_to, sender_name=sender_name,
-                  sender_email=sender_email, language=language, auto_approve=auto_approve, confirm=confirm)
+                  sender_email=sender_email, language=language, auto_approve=auto_approve,
+                  signature_override=signature_override, unsubscribe_text_override=unsubscribe_text_override, confirm=confirm)
     return _run(ctx, "create_campaign", lambda db, call: service.create_campaign(db, call, data), write=True)
 
 
@@ -153,8 +162,16 @@ def delete_lead(ctx: Context, lead_id: int, confirm: Confirm = False) -> dict:
 
 
 @mcp.tool(description="Sequenz der Kampagne setzen: Schritte mit subject, body_text (Klartext) und delay_days. Ersetzt die bisherige Sequenz.")
-def set_sequence(ctx: Context, campaign_id: int, steps: list[StepArg], confirm: Confirm = False) -> dict:
-    data = _model(schemas.SequenceSet, steps=[s.model_dump() for s in steps], confirm=confirm)
+def set_sequence(
+    ctx: Context,
+    campaign_id: int,
+    steps: list[StepArg],
+    signature_override: SignatureArg = None,
+    unsubscribe_text_override: UnsubscribeArg = None,
+    confirm: Confirm = False,
+) -> dict:
+    data = _model(schemas.SequenceSet, steps=[s.model_dump() for s in steps], signature_override=signature_override,
+                  unsubscribe_text_override=unsubscribe_text_override, confirm=confirm)
     return _run(ctx, "set_sequence", lambda db, call: service.set_sequence(db, call, campaign_id, data), write=True)
 
 
@@ -190,6 +207,50 @@ def stop_campaign(ctx: Context, campaign_id: int, confirm: Confirm = False) -> d
 @mcp.tool(description="Kennzahlen: gesendet, Bounces, Abmeldungen, Antworten (aus dem Zammad-Abgleich).")
 def get_stats(ctx: Context, campaign_id: int) -> dict:
     return _run(ctx, "get_stats", lambda db, call: service.get_stats(db, call, campaign_id))
+
+
+@mcp.tool(description="Signaturen des Mandanten pro Sprache, dazu die Standardsignatur (Stufe 4) und die Auflösungsreihenfolge.")
+def list_tenant_signatures(ctx: Context, tenant: str | None = None) -> dict:
+    return _run(ctx, "list_tenant_signatures", lambda db, call: service.list_tenant_signatures(db, call, tenant))
+
+
+@mcp.tool(description="Signatur und Abmeldetext des Mandanten für eine Sprache anlegen oder ersetzen. Platzhalter: {{sender_name}} {{sender_email}} {{reply_to}} {{unsubscribe_url}}. Ohne {{unsubscribe_url}} wird '<unsubscribe_text> <Link>' angehängt.")
+def set_tenant_signature(ctx: Context, language: str, body_text: str, unsubscribe_text: str, tenant: str | None = None, confirm: Confirm = False) -> dict:
+    data = _model(schemas.TenantSignatureSet, tenant=tenant, language=language, body_text=body_text, unsubscribe_text=unsubscribe_text, confirm=confirm)
+    return _run(ctx, "set_tenant_signature", lambda db, call: service.set_tenant_signature(db, call, data), write=True)
+
+
+@mcp.tool(description="Kampagne ändern (nur angegebene Felder). auto_approve=true gibt zusätzlich alle wartenden Entwürfe frei; sie gehen im nächsten Sendefenster raus.")
+def update_campaign(
+    ctx: Context,
+    campaign_id: int,
+    auto_approve: bool | None = None,
+    name: str | None = None,
+    reply_to: str | None = None,
+    sender_name: str | None = None,
+    sender_email: str | None = None,
+    confirm: Confirm = False,
+) -> dict:
+    given = {k: v for k, v in dict(auto_approve=auto_approve, name=name, reply_to=reply_to, sender_name=sender_name, sender_email=sender_email).items() if v is not None}
+    data = _model(schemas.CampaignUpdate, confirm=confirm, **given)
+    return _run(ctx, "update_campaign", lambda db, call: service.update_campaign(db, call, campaign_id, data), write=True)
+
+
+@mcp.tool(description="Wartende Entwürfe einer Kampagne mit Lead, Schritt, Betreff und fertig gerendertem Text. status: draft (wartet auf Freigabe) oder approved (freigegeben, noch nicht gesendet).")
+def list_drafts(ctx: Context, campaign_id: int, status: str = "draft") -> dict:
+    return _run(ctx, "list_drafts", lambda db, call: service.list_drafts(db, call, campaign_id, status))
+
+
+@mcp.tool(description="Entwürfe freigeben: lead_ids oder all=true. Freigegebene Mails gehen im Sendefenster raus, sofern die Kampagne aktiv ist.")
+def approve_drafts(ctx: Context, campaign_id: int, lead_ids: list[int] | None = None, all: bool = False, confirm: Confirm = False) -> dict:
+    data = _model(schemas.ApproveDrafts, lead_ids=lead_ids, all=all, confirm=confirm)
+    return _run(ctx, "approve_drafts", lambda db, call: service.approve_drafts(db, call, campaign_id, data), write=True)
+
+
+@mcp.tool(description="Einen Entwurf verwerfen (draft_id aus list_drafts). Der Lead wird auf skipped gesetzt und nicht weiter angeschrieben.")
+def reject_draft(ctx: Context, draft_id: int, confirm: Confirm = False) -> dict:
+    data = _model(schemas.Confirm, confirm=confirm)
+    return _run(ctx, "reject_draft", lambda db, call: service.reject_draft(db, call, draft_id, data), write=True)
 
 
 def allowed_hosts() -> list[str]:

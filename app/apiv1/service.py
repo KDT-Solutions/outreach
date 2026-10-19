@@ -17,8 +17,8 @@ from sqlalchemy.orm import Session
 from .. import crypto, pipeline
 from ..config import get_settings
 from ..db import SessionLocal
-from ..models import LEAD_STATUSES, ApiAudit, Campaign, Lead, Message, Suppression, Tenant
-from ..services import smtp2go, templating
+from ..models import LEAD_STATUSES, ApiAudit, Campaign, Lead, Message, Suppression, Tenant, TenantSignature
+from ..services import signature, smtp2go, templating
 from . import schemas
 from .security import Principal
 
@@ -210,6 +210,8 @@ def campaign_dict(db: Session, c: Campaign, full: bool = False) -> dict:
         "created_at": _iso(c.created_at),
     }
     if full:
+        d["signature_override"] = c.signature_override
+        d["unsubscribe_text_override"] = c.unsubscribe_text_override
         d["steps"] = steps_out(c.steps)
         d["lead_counts"] = _lead_counts(db, c.id)
     return d
@@ -291,12 +293,14 @@ def create_campaign(db: Session, call: Call, data: schemas.CampaignCreate) -> di
     values = {
         "tenant": tenant.slug, "name": data.name, "sender_name": data.sender_name, "sender_email": data.sender_email,
         "reply_to": data.reply_to, "language": data.language, "auto_approve": data.auto_approve, "status": "draft",
+        "signature_override": data.signature_override or None, "unsubscribe_text_override": data.unsubscribe_text_override or None,
     }
     if not data.confirm:
         return _preview({"would_create": values})
     c = Campaign(
         tenant_id=tenant.id, name=data.name, from_name=data.sender_name, from_email=data.sender_email,
         reply_to=data.reply_to, language=data.language, auto_approve=data.auto_approve, status="draft",
+        signature_override=data.signature_override or None, unsubscribe_text_override=data.unsubscribe_text_override or None,
         # leads come from import_leads, not from Google Places
         sourcing_done=True, steps=[],
     )
@@ -393,8 +397,13 @@ def set_sequence(db: Session, call: Call, campaign_id: int, data: schemas.Sequen
         "placeholders": sorted({p for s in steps for p in templating.placeholders_in(s["subject"] + "\n" + s["body_text"])}),
         "pending_mails_discarded": pending,
     }
+    overrides = {k: (v or None) for k, v in (("signature_override", data.signature_override), ("unsubscribe_text_override", data.unsubscribe_text_override)) if v is not None}
+    if overrides:
+        preview["overrides"] = {k: {"old": getattr(c, k), "new": v} for k, v in overrides.items()}
     if not data.confirm:
         return _preview(preview)
+    for k, v in overrides.items():
+        setattr(c, k, v)
     c.steps = steps
     discarded = 0
     for lead in db.query(Lead).filter(Lead.campaign_id == c.id).all():
@@ -532,9 +541,11 @@ def _render(c: Campaign, lead: Lead, step: int) -> dict:
             raise ApiError(409, "not_rendered", "Dieser Schritt wird per KI geschrieben; eine Vorschau gibt es erst, wenn der Entwurf existiert")
         subject, body, missing, mode = msg.subject, msg.body, [], "llm_draft"
     name, email, reply_to = c.sender
+    block, sig = signature.render(c, lead)
     return {
         "step": step, "mode": mode, "from": f"{name} <{email}>", "reply_to": reply_to,
-        "subject": subject, "body_text": pipeline.compose_body(c.tenant, lead, body), "missing_placeholders": missing,
+        "subject": subject, "body_text": f"{body.strip()}\n\n{block}", "missing_placeholders": missing,
+        "signature": {"text": block, "source": sig.body_source, "unsubscribe_text_source": sig.unsubscribe_source},
     }
 
 
@@ -581,3 +592,144 @@ def send_test(db: Session, call: Call, campaign_id: int, data: schemas.SendTest)
     pipeline.log_event(db, "api_test_sent", f"{c.name} Schritt {data.step} an {data.to}", c.tenant_id)
     call.detail = f"Test Schritt {data.step} an {data.to}"
     return {"confirmed": True, "sent_to": data.to, "provider_id": provider_id, "mail": mail}
+
+
+# ---------------------------------------------------------------- signatures
+def _signature_dict(sig: TenantSignature) -> dict:
+    return {"language": sig.language, "body_text": sig.body_text, "unsubscribe_text": sig.unsubscribe_text, "updated_at": _iso(sig.updated_at)}
+
+
+def list_tenant_signatures(db: Session, call: Call, tenant: str | None = None) -> dict:
+    t = _tenant(db, call, tenant)
+    default = "\n\n".join(p for p in (t.signature.strip(), t.footer.strip()) if p)
+    return {
+        "tenant": t.slug,
+        "signatures": [_signature_dict(s) for s in t.signatures],
+        "default": {"body_text": default, "unsubscribe_text": signature.DEFAULT_UNSUBSCRIBE_TEXT, "note": "Stufe 4, aus den Mandanteneinstellungen"},
+        "resolution": "Kampagnen-Override > Sprache des Leads > Kampagnensprache > default",
+    }
+
+
+def set_tenant_signature(db: Session, call: Call, data: schemas.TenantSignatureSet) -> dict:
+    t = _tenant(db, call, data.tenant)
+    sig = next((s for s in t.signatures if s.language == data.language), None)
+    new = {"language": data.language, "body_text": data.body_text, "unsubscribe_text": data.unsubscribe_text}
+    call.ids["language"] = data.language
+    if not data.confirm:
+        return _preview({"tenant": t.slug, "action": "update" if sig else "create", "old": _signature_dict(sig) if sig else None, "new": new})
+    if sig is None:
+        sig = TenantSignature(tenant_id=t.id, language=data.language)
+        db.add(sig)
+    sig.body_text = data.body_text
+    sig.unsubscribe_text = data.unsubscribe_text
+    db.flush()
+    pipeline.log_event(db, "api_signature_set", f"{t.slug}: Signatur {data.language}", t.id)
+    call.detail = f"Signatur {data.language}"
+    return {"confirmed": True, "tenant": t.slug, "signature": _signature_dict(sig)}
+
+
+# ---------------------------------------------------------------- campaign settings and approval
+CAMPAIGN_FIELDS = {"name": "name", "sender_name": "from_name", "sender_email": "from_email", "reply_to": "reply_to", "auto_approve": "auto_approve"}
+
+
+def _drafts(db: Session, c: Campaign, status: str = "draft", lead_ids: list[int] | None = None) -> list[Message]:
+    q = (
+        db.query(Message)
+        .join(Lead)
+        .filter(Lead.campaign_id == c.id, Lead.deleted_at.is_(None), Message.direction == "out", Message.status == status)
+    )
+    if lead_ids is not None:
+        q = q.filter(Message.lead_id.in_(lead_ids))
+    return q.order_by(Message.id).all()
+
+
+def _draft_dict(m: Message, c: Campaign) -> dict:
+    lead = m.lead
+    return {
+        "draft_id": m.id, "status": m.status, "step": m.step + 1, "subject": m.subject,
+        "body_text": pipeline.compose_body(c, lead, m.body), "created_at": _iso(m.created_at),
+        "lead": {"id": lead.id, "firma": lead.company, "email": lead.email, "status": lead.status},
+    }
+
+
+def _approve(db: Session, msgs: list[Message]) -> list[int]:
+    done = []
+    for m in msgs:
+        pipeline.approve_message(db, m)
+        done.append(m.id)
+    return done
+
+
+def update_campaign(db: Session, call: Call, campaign_id: int, data: schemas.CampaignUpdate) -> dict:
+    c = _campaign(db, call, campaign_id)
+    changes = {k: v for k, v in data.changes().items() if getattr(c, CAMPAIGN_FIELDS[k]) != v}
+    drafts = _drafts(db, c) if changes.get("auto_approve") is True else []
+    preview = {
+        "campaign_id": c.id,
+        "changes": {k: {"old": getattr(c, CAMPAIGN_FIELDS[k]), "new": v} for k, v in changes.items()},
+        "drafts_released": [{"draft_id": m.id, "lead_id": m.lead_id, "step": m.step + 1} for m in drafts],
+    }
+    if not changes:
+        return {"confirmed": bool(data.confirm), "unchanged": True, "campaign": campaign_dict(db, c, full=True)}
+    if not data.confirm:
+        return _preview(preview)
+    for k, v in changes.items():
+        setattr(c, CAMPAIGN_FIELDS[k], v)
+    released = _approve(db, drafts)
+    pipeline.log_event(db, "api_campaign_updated", f"{c.name}: " + ", ".join(changes), c.tenant_id)
+    call.ids["draft_ids"] = released
+    call.detail = "geändert: " + ", ".join(changes) + (f"; {len(released)} Entwürfe freigegeben" if released else "")
+    return {"confirmed": True, "campaign": campaign_dict(db, c, full=True), "drafts_released": len(released)}
+
+
+def list_drafts(db: Session, call: Call, campaign_id: int, status: str = "draft") -> dict:
+    c = _campaign(db, call, campaign_id)
+    if status not in ("draft", "approved"):
+        raise ApiError(422, "validation_error", "status: draft oder approved")
+    drafts = _drafts(db, c, status)
+    return {"campaign_id": c.id, "status": status, "total": len(drafts), "drafts": [_draft_dict(m, c) for m in drafts]}
+
+
+def approve_drafts(db: Session, call: Call, campaign_id: int, data: schemas.ApproveDrafts) -> dict:
+    c = _campaign(db, call, campaign_id)
+    lead_ids = None
+    if data.lead_ids:
+        lead_ids = list(dict.fromkeys(data.lead_ids))
+        found = set(db.scalars(select(Lead.id).where(Lead.id.in_(lead_ids), Lead.campaign_id == c.id, Lead.deleted_at.is_(None))).all())
+        if len(found) != len(lead_ids):
+            # same answer for foreign, deleted and unknown leads
+            raise not_found("Lead")
+    drafts = _drafts(db, c, "draft", lead_ids)
+    without = sorted(set(lead_ids or []) - {m.lead_id for m in drafts})
+    preview = {
+        "campaign_id": c.id,
+        "would_approve": [{"draft_id": m.id, "lead_id": m.lead_id, "email": m.lead.email, "step": m.step + 1, "subject": m.subject} for m in drafts],
+        "leads_without_draft": without,
+    }
+    if not data.confirm:
+        return _preview(preview)
+    approved = _approve(db, drafts)
+    pipeline.log_event(db, "api_drafts_approved", f"{c.name}: {len(approved)} Entwürfe", c.tenant_id)
+    call.ids["draft_ids"] = approved
+    call.ids["lead_ids"] = [m.lead_id for m in drafts]
+    call.detail = f"{len(approved)} freigegeben"
+    return {"confirmed": True, "approved": approved, "leads_without_draft": without}
+
+
+def reject_draft(db: Session, call: Call, draft_id: int, data: schemas.Confirm) -> dict:
+    m = db.get(Message, draft_id)
+    if m is None or m.direction != "out" or m.lead.deleted_at is not None or not call.principal.may_access(m.lead.campaign.tenant.slug):
+        raise not_found("Entwurf")
+    call.tenant_id = m.tenant_id
+    call.ids.update(draft_id=m.id, lead_id=m.lead_id, campaign_id=m.lead.campaign_id)
+    if m.status != "draft":
+        raise ApiError(409, "not_a_draft", f"Nachricht hat Status {m.status}, nur Entwürfe können verworfen werden")
+    preview = {"draft": _draft_dict(m, m.lead.campaign), "effect": "Entwurf verworfen, Lead auf skipped (keine weiteren Mails)"}
+    if not data.confirm:
+        return _preview(preview)
+    m.status = "failed"
+    m.error = "verworfen (API)"
+    m.lead.status = "skipped"
+    m.lead.next_send_at = None
+    pipeline.log_event(db, "api_draft_rejected", f"Entwurf {m.id}", m.tenant_id, m.lead_id)
+    return {"confirmed": True, "draft_id": m.id, "lead_id": m.lead_id, "lead_status": "skipped"}

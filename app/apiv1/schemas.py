@@ -40,7 +40,19 @@ def _template(v: str) -> str:
     return v
 
 
+def _signature_template(v: str | None) -> str | None:
+    if v is None:
+        return None
+    problems = templating.check_template(v, allowed=templating.SIGNATURE_PLACEHOLDERS)
+    if problems:
+        raise ValueError("; ".join(problems))
+    return v.strip()
+
+
 Email = Annotated[str, AfterValidator(_email)]
+# signature block (multi-line) and unsubscribe text (one line); "" clears a campaign override
+SignatureText = Annotated[str, Field(max_length=5000), AfterValidator(_signature_template)]
+UnsubscribeText = Annotated[str, Field(max_length=500), AfterValidator(_single_line), AfterValidator(_signature_template)]
 Lang = Annotated[str, Field(pattern=r"^[a-z]{2}$", description="ISO-639-1, z.B. de, fr, it, en")]
 
 
@@ -64,7 +76,49 @@ class CampaignCreate(_Strict):
     reply_to: Email
     language: Lang = "de"
     auto_approve: bool = Field(False, description="Gerenderte Mails ohne manuelle Freigabe in der Oberfläche senden")
+    signature_override: SignatureText | None = None
+    unsubscribe_text_override: UnsubscribeText | None = None
     confirm: bool = False
+
+
+class CampaignUpdate(_Strict):
+    name: Line(120) | None = None
+    sender_name: Line(120) | None = None
+    sender_email: Email | None = None
+    reply_to: Email | None = None
+    auto_approve: bool | None = Field(None, description="true: wartende Entwürfe werden freigegeben und gehen in den Versand")
+    confirm: bool = False
+
+    def changes(self) -> dict:
+        return {k: v for k, v in self.model_dump(exclude_unset=True, exclude={"confirm"}).items() if v is not None}
+
+
+class TenantSignatureSet(_Strict):
+    tenant: str | None = Field(None, description="Mandanten-Slug; nur nötig, wenn der Token mehrere Mandanten hat")
+    language: Lang
+    body_text: Annotated[SignatureText, Field(min_length=1)]
+    unsubscribe_text: Annotated[UnsubscribeText, Field(min_length=1)]
+    confirm: bool = False
+
+
+class SignatureBody(_Strict):
+    """REST body for PUT /tenants/{tenant}/signatures/{language}; validated again as TenantSignatureSet."""
+
+    body_text: str
+    unsubscribe_text: str
+    confirm: bool = False
+
+
+class ApproveDrafts(_Strict):
+    lead_ids: list[int] | None = Field(None, min_length=1, max_length=1000)
+    all: bool = False
+    confirm: bool = False
+
+    @model_validator(mode="after")
+    def _one_selector(self):
+        if bool(self.lead_ids) == bool(self.all):
+            raise ValueError("Entweder lead_ids oder all=true angeben")
+        return self
 
 
 class LeadIn(_Strict):
@@ -106,6 +160,9 @@ class StepIn(_Strict):
 
 class SequenceSet(_Strict):
     steps: list[StepIn] = Field(min_length=1, max_length=MAX_STEPS)
+    # None = unverändert, "" = Override entfernen
+    signature_override: SignatureText | None = None
+    unsubscribe_text_override: UnsubscribeText | None = None
     confirm: bool = False
 
     @model_validator(mode="after")

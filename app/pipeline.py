@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from . import crypto
 from .config import get_settings
 from .models import Campaign, Event, Lead, Message, Suppression, Tenant
-from .services import crawler, hunter, llm, places, scheduling, smtp2go, templating, verify, zammad
+from .services import crawler, hunter, llm, places, scheduling, signature, smtp2go, templating, verify, zammad
 
 log = logging.getLogger(__name__)
 
@@ -350,7 +350,7 @@ def send_due(db: Session, limit: int) -> int:
                 db.commit()
                 continue
             try:
-                body = compose_body(tenant, lead, msg.body)
+                body = compose_body(lead.campaign, lead, msg.body)
                 from_name, from_email, reply_to = lead.campaign.sender
                 sender = f"{from_name} <{from_email}>"
                 unsubscribe_url = f"{s.public_base_url.rstrip('/')}/u/{lead.unsubscribe_token}"
@@ -393,15 +393,9 @@ def send_due(db: Session, limit: int) -> int:
     return sent
 
 
-def compose_body(tenant: Tenant, lead: Lead, body: str) -> str:
-    s = get_settings()
-    unsubscribe_url = f"{s.public_base_url.rstrip('/')}/u/{lead.unsubscribe_token}"
-    parts = [body.strip()]
-    if tenant.signature.strip():
-        parts.append(tenant.signature.strip())
-    footer = tenant.footer.strip()
-    parts.append((footer + "\n\n" if footer else "") + f"Keine weiteren Mails von uns gewünscht? Hier abmelden: {unsubscribe_url}")
-    return "\n\n".join(parts)
+def compose_body(campaign: Campaign, lead: Lead, body: str) -> str:
+    """Mail body plus signature and unsubscribe line (see services/signature.py)."""
+    return signature.compose(campaign, lead, body)
 
 
 # ---------------------------------------------------------------- replies (via Zammad)
