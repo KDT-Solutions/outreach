@@ -12,7 +12,7 @@ Self-hosted, multi-tenant B2B cold-email outreach for Swiss SMEs. Replaces an
    queue unless the campaign is set to auto-approve.
 4. **Sending & replies** – SMTP2GO per tenant, business-hours window, daily cap,
    jitter, one-click unsubscribe (RFC 8058), bounce/spam/unsubscribe webhooks,
-   IMAP reply detection with classification and optional Zammad hand-off.
+   reply detection through the tenant's Zammad (the reply-to mailbox is a Zammad channel): new tickets are matched to leads, classified, the sequence stops, and the lead context lands as an internal note on the ticket.
 
 ## Stack
 
@@ -45,8 +45,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 | Anthropic API key | Copywriting, reply classification | `ANTHROPIC_API_KEY` |
 | Hunter.io API key (optional, free plan is enough) | E-mail fallback | `HUNTER_API_KEY` |
 | SMTP2GO API key, sending domains verified (SPF/DKIM) | Sending | `SMTP2GO_API_KEY` globally, or per tenant in the UI (tenant key wins) |
-| IMAP credentials of the reply mailbox (optional) | Reply detection | Tenant settings |
-| Zammad URL + API token (optional) | Ticket on reply | Tenant settings |
+| Zammad URL + API token (optional) | Reply detection | Tenant settings; the token needs ticket.agent rights |
 
 Google Places pricing: Text Search Pro has a free monthly quota (5'000 calls at the
 time of writing), Place Details Enterprise (website + phone) 1'000. The tool only
@@ -71,7 +70,7 @@ https://<PUBLIC_BASE_URL>/webhooks/smtp2go/<tenant-slug>/<webhook-token>
    regenerate, discard) or enable auto-approve on the campaign.
 4. Approved mails go out inside the send window, respecting the daily cap.
    Follow-ups are drafted a day before they are due.
-5. Replies stop the sequence, get classified, and are handed to Zammad if configured.
+5. Replies arrive in Zammad; the worker polls new tickets every two minutes, stops the sequence, classifies the reply and notes the lead context on the ticket.
 
 ## JSON API
 
@@ -87,7 +86,7 @@ All `/api/...` routes need `Authorization: Bearer <API_TOKEN>`:
 
 - Single admin login; signed, `HttpOnly`, `SameSite=Strict` session cookie; CSRF token
   on every form; login attempts rate-limited per IP.
-- Tenant secrets (SMTP2GO, IMAP, Zammad) are encrypted at rest with
+- Tenant secrets (SMTP2GO, Zammad) are encrypted at rest with
   `DATA_ENCRYPTION_KEY`.
 - Webhook URLs carry a per-tenant random token; unsubscribe links a per-lead token.
 - The crawler fetches only the lead's own website (same host), max ~1.5 MB per page,

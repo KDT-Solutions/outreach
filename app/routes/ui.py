@@ -121,12 +121,6 @@ async def tenant_save(request: Request, sess: dict = Depends(require_csrf), db: 
     t.timezone = f.get("timezone", "Europe/Zurich").strip() or "Europe/Zurich"
     if f.get("smtp2go_api_key", "").strip():
         t.smtp2go_api_key_enc = crypto.encrypt(f["smtp2go_api_key"].strip())
-    t.imap_host = f.get("imap_host", "").strip() or None
-    t.imap_port = int(f.get("imap_port") or 993)
-    t.imap_user = f.get("imap_user", "").strip() or None
-    t.imap_folder = f.get("imap_folder", "INBOX").strip() or "INBOX"
-    if f.get("imap_password", "").strip():
-        t.imap_password_enc = crypto.encrypt(f["imap_password"].strip())
     t.zammad_url = f.get("zammad_url", "").strip() or None
     t.zammad_group = f.get("zammad_group", "").strip() or None
     if f.get("zammad_token", "").strip():

@@ -20,6 +20,24 @@ def init_db() -> None:
     from . import models  # noqa: F401  (register tables)
 
     Base.metadata.create_all(engine)
+    _ensure_columns()
+
+
+def _ensure_columns() -> None:
+    """Poor man's migration: add columns introduced after the first release."""
+    from sqlalchemy import inspect, text
+
+    wanted = {
+        "tenants": {"zammad_last_poll": "TIMESTAMP WITH TIME ZONE"},
+        "messages": {"zammad_ticket_id": "INTEGER"},
+    }
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table, cols in wanted.items():
+            existing = {c["name"] for c in insp.get_columns(table)}
+            for col, ddl in cols.items():
+                if col not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
 
 
 def get_db():

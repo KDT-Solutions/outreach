@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from . import crypto
 from .config import get_settings
 from .models import Campaign, Event, Lead, Message, Suppression, Tenant
-from .services import crawler, hunter, imap_replies, llm, places, scheduling, smtp2go, verify, zammad
+from .services import crawler, hunter, llm, places, scheduling, smtp2go, verify, zammad
 
 log = logging.getLogger(__name__)
 
@@ -347,47 +347,60 @@ def _compose_body(tenant: Tenant, lead: Lead, body: str) -> str:
     return "\n\n".join(parts)
 
 
-# ---------------------------------------------------------------- replies
+# ---------------------------------------------------------------- replies (via Zammad)
+GENERIC_MAIL_DOMAINS = ("gmail.com", "bluewin.ch", "gmx.ch", "gmx.net", "gmx.de", "hotmail.com", "outlook.com", "yahoo.com", "icloud.com", "sunrise.ch", "hispeed.ch")
+
+
 def poll_replies(db: Session) -> int:
+    """Replies arrive in the tenant's Zammad (the reply-to mailbox is connected there).
+    Pull tickets created since the last poll, match them to leads, stop the sequence,
+    classify, and leave the lead context as an internal note on the ticket."""
     handled = 0
-    tenants = db.query(Tenant).filter(Tenant.active.is_(True), Tenant.imap_host.isnot(None)).all()
+    tenants = db.query(Tenant).filter(Tenant.active.is_(True), Tenant.zammad_url.isnot(None)).all()
     for tenant in tenants:
-        password = crypto.decrypt(tenant.imap_password_enc)
-        if not (tenant.imap_user and password):
+        token = crypto.decrypt(tenant.zammad_token_enc)
+        if not token:
             continue
+        now = datetime.now(timezone.utc)
+        since = tenant.zammad_last_poll or (now - timedelta(days=2))
+        since_iso = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
-            inbound = imap_replies.fetch_unseen(tenant.imap_host, tenant.imap_port, tenant.imap_user, password, tenant.imap_folder)
+            tickets = zammad.recent_tickets(tenant.zammad_url, token, since_iso, tenant.zammad_group or None)
         except Exception as exc:
-            log.warning("IMAP %s: %s", tenant.slug, exc)
-            log_event(db, "imap_error", str(exc)[:500], tenant.id)
+            log.warning("Zammad poll %s: %s", tenant.slug, exc)
+            log_event(db, "zammad_error", str(exc)[:500], tenant.id)
             db.commit()
             continue
-        seen_uids: list[str] = []
-        for mail in inbound:
-            lead = _match_lead(db, tenant, mail)
+        for t in tickets:
+            tid = t.get("id")
+            if not tid or db.query(Message.id).filter(Message.zammad_ticket_id == tid).first():
+                continue
+            cust = t.get("customer") if isinstance(t.get("customer"), dict) else None
+            from_email = ((cust or {}).get("email") or t.get("customer_email") or "").lower()
+            lead = _match_lead(db, tenant, from_email)
             if lead is None:
-                continue  # not ours; leave unseen for the human mailbox
-            seen_uids.append(mail.uid)
+                continue
+            art = zammad.first_article(tenant.zammad_url, token, tid) or {}
+            body = art.get("body") or ""
+            if (art.get("content_type") or "").startswith("text/html"):
+                from bs4 import BeautifulSoup
+
+                body = BeautifulSoup(body, "lxml").get_text(" ", strip=True)
+            subject = t.get("title") or ""
             try:
-                cls = llm.classify_reply(mail.subject, mail.body)
+                cls = llm.classify_reply(subject, body)
             except Exception as exc:
                 log.warning("classify failed: %s", exc)
                 cls = "other"
             db.add(
                 Message(
-                    lead_id=lead.id,
-                    tenant_id=tenant.id,
-                    direction="in",
-                    step=lead.step,
-                    subject=mail.subject[:300],
-                    body=mail.body,
-                    status="received",
-                    from_email=mail.from_email,
-                    classification=cls,
+                    lead_id=lead.id, tenant_id=tenant.id, direction="in", step=lead.step,
+                    subject=subject[:300], body=body[:8000], status="received",
+                    from_email=from_email or None, classification=cls, zammad_ticket_id=tid,
                 )
             )
             if cls in ("out_of_office", "auto_reply"):
-                log_event(db, "reply_auto", f"{cls} von {mail.from_email}", tenant.id, lead.id)
+                log_event(db, "reply_auto", f"{cls} von {from_email} (Ticket {t.get('number')})", tenant.id, lead.id)
             else:
                 lead.status = "replied"
                 lead.next_send_at = None
@@ -396,67 +409,47 @@ def poll_replies(db: Session) -> int:
                         m.status = "failed"
                         m.error = "Antwort erhalten, Sequenz gestoppt"
                 if cls == "unsubscribe":
-                    suppress(db, tenant.id, lead.email or mail.from_email, "unsubscribe")
+                    suppress(db, tenant.id, lead.email or from_email, "unsubscribe")
                 elif cls == "bounce":
-                    suppress(db, tenant.id, lead.email or mail.from_email, "bounce")
-                log_event(db, "reply", f"{cls} von {mail.from_email}: {mail.subject}", tenant.id, lead.id)
-                _handoff(tenant, lead, mail, cls)
+                    suppress(db, tenant.id, lead.email or from_email, "bounce")
+                log_event(db, "reply", f"{cls} von {from_email}: {subject} (Ticket {t.get('number')})", tenant.id, lead.id)
+                note = (
+                    f"Outreach-Antwort, Einstufung: {cls}\n"
+                    f"Kampagne: {lead.campaign.name}\nFirma: {lead.company}\nWebseite: {lead.website or '-'}\n"
+                    f"Telefon: {lead.phone or '-'}\nAnsprechperson: {lead.contact_name or '-'}\n"
+                    f"Gesendete Schritte: {lead.step}\nLead: {get_settings().public_base_url.rstrip('/')}/leads/{lead.id}"
+                )
+                try:
+                    zammad.add_note(tenant.zammad_url, token, tid, note)
+                except Exception as exc:
+                    log.warning("Zammad note failed: %s", exc)
             handled += 1
             db.commit()
-        try:
-            imap_replies.mark_seen(tenant.imap_host, tenant.imap_port, tenant.imap_user, password, tenant.imap_folder, seen_uids)
-        except Exception as exc:
-            log.warning("IMAP mark seen %s: %s", tenant.slug, exc)
+        tenant.zammad_last_poll = now
+        db.commit()
     return handled
 
 
-def _match_lead(db: Session, tenant: Tenant, mail: imap_replies.Inbound) -> Lead | None:
-    refs = " ".join(filter(None, [mail.in_reply_to, mail.references]))
-    if refs:
-        out = (
-            db.query(Message)
-            .filter(Message.tenant_id == tenant.id, Message.direction == "out", Message.message_id_header.isnot(None))
-            .filter(Message.message_id_header.in_([r for r in refs.split() if r]))
-            .first()
-        )
-        if out:
-            return out.lead
-    if mail.from_email:
-        lead = (
-            db.query(Lead)
-            .filter(Lead.tenant_id == tenant.id, Lead.email == mail.from_email, Lead.last_sent_at.isnot(None))
-            .order_by(Lead.last_sent_at.desc())
-            .first()
-        )
-        if lead:
-            return lead
-        # same domain, personal reply from a different mailbox
-        dom = mail.from_email.rsplit("@", 1)[-1]
-        if dom and dom not in ("gmail.com", "bluewin.ch", "gmx.ch", "gmx.net", "hotmail.com", "outlook.com", "yahoo.com"):
-            return (
-                db.query(Lead)
-                .filter(Lead.tenant_id == tenant.id, Lead.domain == dom, Lead.last_sent_at.isnot(None))
-                .order_by(Lead.last_sent_at.desc())
-                .first()
-            )
-    return None
-
-
-def _handoff(tenant: Tenant, lead: Lead, mail: imap_replies.Inbound, cls: str) -> None:
-    token = crypto.decrypt(tenant.zammad_token_enc)
-    if not (tenant.zammad_url and token and tenant.zammad_group):
-        return
-    if cls in ("bounce",):
-        return
-    note = (
-        f"Outreach-Antwort ({cls}) auf Kampagne '{lead.campaign.name}'.\n"
-        f"Firma: {lead.company}\nWebseite: {lead.website or '-'}\nTelefon: {lead.phone or '-'}\n"
-        f"Ansprechperson: {lead.contact_name or '-'}"
+def _match_lead(db: Session, tenant: Tenant, from_email: str) -> Lead | None:
+    if not from_email or "@" not in from_email:
+        return None
+    lead = (
+        db.query(Lead)
+        .filter(Lead.tenant_id == tenant.id, Lead.email == from_email, Lead.last_sent_at.isnot(None))
+        .order_by(Lead.last_sent_at.desc())
+        .first()
     )
-    try:
-        zammad.create_ticket(tenant.zammad_url, token, tenant.zammad_group, mail.from_email, mail.subject or f"Antwort {lead.company}", mail.body, note)
-    except Exception as exc:
-        log.warning("Zammad handoff failed: %s", exc)
+    if lead:
+        return lead
+    dom = from_email.rsplit("@", 1)[-1]
+    if dom in GENERIC_MAIL_DOMAINS:
+        return None
+    return (
+        db.query(Lead)
+        .filter(Lead.tenant_id == tenant.id, Lead.domain == dom, Lead.last_sent_at.isnot(None))
+        .order_by(Lead.last_sent_at.desc())
+        .first()
+    )
 
 
 # ---------------------------------------------------------------- webhooks

@@ -1,4 +1,4 @@
-"""Create a Zammad ticket for a reply so the follow-up happens in the helpdesk."""
+"""Zammad: read new tickets (replies land there via the tenant mailbox) and add notes."""
 
 from __future__ import annotations
 
@@ -37,3 +37,44 @@ def create_ticket(url: str, token: str, group: str, customer_email: str, title: 
                 headers=headers,
             )
         return ticket_id
+
+
+def _headers(token: str) -> dict:
+    return {"Authorization": f"Token token={token}", "Content-Type": "application/json"}
+
+
+def recent_tickets(url: str, token: str, since_iso: str, group: str | None = None, limit: int = 100) -> list[dict]:
+    """Tickets created after since_iso (UTC, e.g. 2026-10-19T12:00:00Z), expanded with customer email."""
+    q = f"created_at:>{since_iso}"
+    if group:
+        q += f' AND group.name:"{group}"'
+    with httpx.Client(timeout=30) as client:
+        r = client.get(
+            url.rstrip("/") + "/api/v1/tickets/search",
+            params={"query": q, "limit": limit, "expand": "true", "sort_by": "created_at", "order_by": "asc"},
+            headers=_headers(token),
+        )
+        if r.status_code != 200:
+            log.warning("Zammad search %s: %s", r.status_code, r.text[:300])
+            return []
+        data = r.json()
+        return data if isinstance(data, list) else data.get("tickets", []) or []
+
+
+def first_article(url: str, token: str, ticket_id: int) -> dict | None:
+    with httpx.Client(timeout=30) as client:
+        r = client.get(url.rstrip("/") + f"/api/v1/ticket_articles/by_ticket/{ticket_id}", headers=_headers(token))
+        if r.status_code != 200:
+            return None
+        arts = r.json() or []
+        return arts[0] if arts else None
+
+
+def add_note(url: str, token: str, ticket_id: int, body: str) -> bool:
+    with httpx.Client(timeout=30) as client:
+        r = client.post(
+            url.rstrip("/") + "/api/v1/ticket_articles",
+            json={"ticket_id": ticket_id, "body": body, "type": "note", "internal": True, "content_type": "text/plain"},
+            headers=_headers(token),
+        )
+        return r.status_code in (200, 201)

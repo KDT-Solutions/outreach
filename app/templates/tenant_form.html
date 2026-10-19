@@ -40,20 +40,8 @@
 </div>
 
 <div class="card">
-<h2 style="margin-top:0">Antworten lesen (IMAP, optional)</h2>
-<p class="small muted">Das Postfach der Absender- bzw. Reply-To-Adresse. Es werden nur ungelesene Mails geprüft; nur Antworten auf Outreach-Mails werden als gelesen markiert.</p>
-<div class="row">
-<div><label>IMAP-Host</label><input type="text" name="imap_host" value="{{ t.imap_host or '' if t else '' }}"></div>
-<div><label>Port</label><input type="number" name="imap_port" value="{{ t.imap_port if t else 993 }}"></div>
-<div><label>Benutzer</label><input type="text" name="imap_user" value="{{ t.imap_user or '' if t else '' }}"></div>
-<div><label>Passwort <span class="hint">{% if t and t.imap_password_enc %}gesetzt{% endif %}</span></label><input type="password" name="imap_password" autocomplete="new-password"></div>
-<div><label>Ordner</label><input type="text" name="imap_folder" value="{{ t.imap_folder if t else 'INBOX' }}"></div>
-</div>
-</div>
-
-<div class="card">
-<h2 style="margin-top:0">Zammad-Übergabe (optional)</h2>
-<p class="small muted">Jede echte Antwort wird als Ticket in dieser Gruppe angelegt, mit den Lead-Daten als interne Notiz.</p>
+<h2 style="margin-top:0">Antworten aus Zammad</h2>
+<p class="small muted">Die Reply-To-Adresse muss in Zammad als Kanal eingebunden sein. Neue Tickets in dieser Gruppe werden alle 2 Minuten mit den Leads abgeglichen; bei einem Treffer stoppt die Sequenz und die Lead-Daten kommen als interne Notiz ins Ticket. Gruppe leer = alle Gruppen.</p>
 <div class="row">
 <div><label>Zammad-URL</label><input type="text" name="zammad_url" value="{{ t.zammad_url or '' if t else '' }}" placeholder="https://helpdesk.example.com"></div>
 <div><label>Gruppe</label><input type="text" name="zammad_group" value="{{ t.zammad_group or '' if t else '' }}"></div>

@@ -1,4 +1,4 @@
-"""Encryption of tenant secrets (SMTP2GO keys, IMAP passwords) at rest."""
+"""Encryption of tenant secrets (SMTP2GO keys, Zammad tokens) at rest."""
 
 from cryptography.fernet import Fernet, InvalidToken
 

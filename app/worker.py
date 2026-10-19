@@ -45,8 +45,8 @@ def tick() -> None:
         if n:
             log.info("sent %d mails", n)
 
-        # 5. replies, every 5 minutes
-        if time.time() - _last_reply_poll > 300:
+        # 5. replies from Zammad, every 2 minutes
+        if time.time() - _last_reply_poll > 120:
             _last_reply_poll = time.time()
             try:
                 n = pipeline.poll_replies(db)

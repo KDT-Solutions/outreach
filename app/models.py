@@ -50,17 +50,11 @@ class Tenant(Base):
     smtp2go_api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     webhook_token: Mapped[str] = mapped_column(String(64), default=new_token)
 
-    # Reply polling (optional)
-    imap_host: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    imap_port: Mapped[int] = mapped_column(Integer, default=993)
-    imap_user: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    imap_password_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
-    imap_folder: Mapped[str] = mapped_column(String(100), default="INBOX")
-
     # Zammad hand-off (optional)
     zammad_url: Mapped[str | None] = mapped_column(String(200), nullable=True)
     zammad_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     zammad_group: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    zammad_last_poll: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     daily_limit: Mapped[int] = mapped_column(Integer, default=40)
     send_hour_start: Mapped[int] = mapped_column(Integer, default=9)
@@ -187,6 +181,7 @@ class Message(Base):
     # inbound only
     from_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
     classification: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    zammad_ticket_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     lead: Mapped[Lead] = relationship(back_populates="messages")
