@@ -228,7 +228,7 @@ def generate_for_lead(db: Session, lead: Lead) -> Message | None:
         if better and better != lead.email and not is_suppressed(db, tenant.id, better) and verify.check(better):
             log_event(db, "email_switch", f"{lead.email} -> {better} (passt zu {lead.contact_name})", tenant.id, lead.id)
             lead.email = better
-    if draft.salutation:
+    if draft.salutation and not lead.salutation:
         lead.salutation = draft.salutation[:120]
     msg = Message(lead_id=lead.id, tenant_id=tenant.id, direction="out", step=lead.step, subject=draft.subject, body=draft.body)
     if campaign.auto_approve:

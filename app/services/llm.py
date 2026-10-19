@@ -36,6 +36,10 @@ class NoJsonError(ValueError):
     """The model answered, but not with a usable JSON object."""
 
 
+# room for the model's reasoning plus the JSON; 1200 cut answers off mid-JSON
+MAX_TOKENS = 4000
+
+
 def _json_from(text: str) -> dict:
     """First JSON object in the text; tolerates code fences and text around it."""
     text = re.sub(r"```(?:json)?", "", text or "")
@@ -95,6 +99,8 @@ Adresse: {lead.address or '-'}
 Webseite: {lead.website or '-'}
 Google-Kategorien: {lead.place_types or '-'}
 Bekannter Ansprechpartner: {lead.contact_name or 'unbekannt'}
+Empfängeradresse: {lead.email or '-'}
+Vorgegebene Anrede: {lead.salutation or 'keine'}
 
 Auszug Startseite:
 {(lead.site_excerpt or '')[:2500]}
@@ -105,7 +111,7 @@ Auszug Impressum/Kontakt:
 
 Aufgabe:
 1. Finde im Impressum/Kontakt-Auszug, falls vorhanden, den Namen der Inhaberin/des Inhabers bzw. der Geschäftsführung (Vor- und Nachname). Wenn unklar: null.
-2. Bilde daraus die Anrede (z.B. "Guten Tag Herr Müller" oder "Guten Tag Frau Keller"); wenn kein Name oder Geschlecht unklar: "Guten Tag".
+2. Ist eine Anrede vorgegeben, übernimm sie unverändert. Sonst bilde sie aus dem bekannten Ansprechpartner bzw. dem gefundenen Namen (z.B. "Guten Tag Herr Müller" oder "Guten Tag Frau Keller"); passt der Name nicht sicher zur Empfängeradresse, kein Name oder Geschlecht unklar: "Guten Tag".
 3. Schreibe Betreff und Mailtext. Der Text beginnt mit der Anrede.
 
 JSON-Format:
@@ -114,7 +120,7 @@ JSON-Format:
     client = _client()
     model = get_settings().anthropic_model
     messages = [{"role": "user", "content": user}]
-    msg = client.messages.create(model=model, max_tokens=1200, system=system, messages=messages)
+    msg = client.messages.create(model=model, max_tokens=MAX_TOKENS, system=system, messages=messages)
     text = _text_of(msg)
     try:
         data = _json_from(text)
@@ -129,7 +135,7 @@ JSON-Format:
             "content": "Bitte antworte jetzt ausschliesslich mit dem JSON-Objekt im verlangten Format, ohne weiteren Text. "
             "Fehlen Angaben zum Empfänger, schreibe trotzdem eine allgemeine Mail ohne erfundene Details.",
         })
-        msg = client.messages.create(model=model, max_tokens=1200, system=system, messages=messages)
+        msg = client.messages.create(model=model, max_tokens=MAX_TOKENS, system=system, messages=messages)
         text = _text_of(msg)
         try:
             data = _json_from(text)

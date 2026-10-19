@@ -102,3 +102,18 @@ def test_parks_lead_after_three_failures_and_update_resets(monkeypatch, client, 
         lead = db.get(Lead, ai_lead)
         assert lead.status == "enriched"
         assert pipeline.generate_failures(db, ai_lead) == 0
+
+
+def test_set_salutation_is_kept_and_passed_to_model(monkeypatch, ai_lead):
+    with SessionLocal() as db:
+        lead = db.get(Lead, ai_lead)
+        lead.salutation = "Guten Tag Frau Muster"
+        db.commit()
+    other = GOOD.replace('"salutation": "Guten Tag"', '"salutation": "Guten Tag Herr Muster"')
+    client = _fake(monkeypatch, [other])
+    with SessionLocal() as db:
+        pipeline.generate_batch(db, 10)
+        assert db.get(Lead, ai_lead).salutation == "Guten Tag Frau Muster"
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "Vorgegebene Anrede: Guten Tag Frau Muster" in prompt
+    assert client.calls[0]["max_tokens"] == llm.MAX_TOKENS
