@@ -128,6 +128,7 @@ def enrich_lead(db: Session, lead: Lead) -> None:
     lead.impressum_excerpt = res.impressum_excerpt or None
     email = res.best_email
     source = "crawler" if email else None
+    lead.email_candidates = ",".join(res.emails[:10]) or None
 
     if not email and lead.domain:
         best = hunter.pick_best(hunter.domain_search(lead.domain))
@@ -194,6 +195,12 @@ def generate_for_lead(db: Session, lead: Lead) -> Message | None:
     draft = llm.write_mail(tenant, campaign, lead, lead.step, previous)
     if draft.contact_name and not lead.contact_name:
         lead.contact_name = draft.contact_name[:120]
+    # the Impressum named a person: switch to their mailbox if the crawler saw one
+    if lead.step == 0 and lead.contact_name and lead.email_candidates and lead.email_source == "crawler":
+        better = crawler.pick_for_contact(lead.email_candidates.split(","), lead.contact_name)
+        if better and better != lead.email and not is_suppressed(db, tenant.id, better) and verify.check(better):
+            log_event(db, "email_switch", f"{lead.email} -> {better} (passt zu {lead.contact_name})", tenant.id, lead.id)
+            lead.email = better
     if draft.salutation:
         lead.salutation = draft.salutation[:120]
     msg = Message(lead_id=lead.id, tenant_id=tenant.id, direction="out", step=lead.step, subject=draft.subject, body=draft.body)

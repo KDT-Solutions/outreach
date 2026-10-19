@@ -81,15 +81,40 @@ def _extract_emails(html: str, soup: BeautifulSoup) -> set[str]:
     return clean
 
 
-def rank_emails(emails: set[str], domain: str | None) -> list[str]:
-    def score(e: str) -> tuple:
-        local, _, dom = e.partition("@")
-        same_domain = 1 if domain and (dom == domain or dom.endswith("." + domain)) else 0
-        personal = 1 if local.split("+")[0] not in GENERIC_LOCALPARTS else 0
-        looks_personal = 1 if ("." in local or "-" in local) and personal else 0
-        return (same_domain, looks_personal, personal, -len(e))
+def is_generic(email: str) -> bool:
+    return email.partition("@")[0].split("+")[0].lower() in GENERIC_LOCALPARTS
 
-    return sorted(emails, key=score, reverse=True)
+
+def rank_emails(emails: set[str], domain: str | None) -> list[str]:
+    """Own-domain first. A single personal address on the company domain beats info@;
+    with several personal addresses we cannot tell who is who, so info@ comes first."""
+    def same(e: str) -> bool:
+        dom = e.partition("@")[2]
+        return bool(domain and (dom == domain or dom.endswith("." + domain)))
+
+    own = [e for e in emails if same(e)]
+    other = [e for e in emails if not same(e)]
+    own_personal = sorted(e for e in own if not is_generic(e))
+    own_generic = sorted((e for e in own if is_generic(e)), key=lambda e: (e.split("@")[0] != "info", e))
+    if len(own_personal) == 1:
+        ordered = own_personal + own_generic
+    else:
+        ordered = own_generic + own_personal
+    return ordered + sorted(other, key=lambda e: (not is_generic(e), e))
+
+
+def pick_for_contact(candidates: list[str], contact_name: str | None) -> str | None:
+    """If a candidate's local part matches the contact's name, return it."""
+    if not contact_name or not candidates:
+        return None
+    parts = [p.lower() for p in re.split(r"[\s\-]+", contact_name) if len(p) > 2]
+    if not parts:
+        return None
+    for e in candidates:
+        local = e.partition("@")[0].lower()
+        if any(p in local for p in parts):
+            return e
+    return None
 
 
 def crawl(website: str) -> CrawlResult:

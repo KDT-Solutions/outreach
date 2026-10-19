@@ -30,6 +30,7 @@ def _ensure_columns() -> None:
     wanted = {
         "tenants": {"zammad_last_poll": "TIMESTAMP WITH TIME ZONE"},
         "messages": {"zammad_ticket_id": "INTEGER"},
+        "leads": {"email_candidates": "TEXT"},
     }
     obsolete = {"tenants": ["imap_host", "imap_port", "imap_user", "imap_password_enc", "imap_folder"]}
     insp = inspect(engine)

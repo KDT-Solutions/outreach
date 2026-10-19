@@ -140,6 +140,8 @@ class Lead(Base):
     email: Mapped[str | None] = mapped_column(String(200), nullable=True)
     email_source: Mapped[str | None] = mapped_column(String(30), nullable=True)  # crawler|hunter|manual
     email_mx_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # ranked addresses the crawler found, comma-separated (first 10)
+    email_candidates: Mapped[str | None] = mapped_column(Text, nullable=True)
     contact_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     salutation: Mapped[str | None] = mapped_column(String(120), nullable=True)
     # Text the LLM sees: homepage + impressum/kontakt excerpt
