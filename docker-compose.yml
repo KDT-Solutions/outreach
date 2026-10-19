@@ -22,7 +22,7 @@ services:
       - SMTP2GO_API_KEY=${SMTP2GO_API_KEY:-}
       - TZ=${TZ:-Europe/Zurich}
     ports:
-      - "${HOST_PORT:-8427}:8000"
+      - "${BIND_ADDR:-127.0.0.1}:${HOST_PORT:-8429}:8000"
 
   worker:
     image: ghcr.io/kdt-solutions/outreach:latest

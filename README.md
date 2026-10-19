@@ -26,7 +26,7 @@ cp .env.example .env   # fill in the values
 docker compose up -d   # image comes from ghcr.io, built by the GitHub Actions workflow
 ```
 
-The UI listens on `HOST_PORT` (default 8427). Put a reverse proxy with TLS in
+The UI listens on `HOST_PORT` (default 8429, bound to `BIND_ADDR`, default loopback). Put a reverse proxy with TLS in
 front and set `PUBLIC_BASE_URL` to the public URL – it is used for the
 unsubscribe links and the CSRF origin check.
 
