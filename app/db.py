@@ -37,6 +37,9 @@ def _ensure_columns() -> None:
             "city": "VARCHAR(120)",
             "language": "VARCHAR(10)",
             "deleted_at": "TIMESTAMP WITH TIME ZONE",
+            "unsubscribe_reason": "VARCHAR(40)",
+            "unsubscribe_comment": "TEXT",
+            "unsubscribed_at": "TIMESTAMP WITH TIME ZONE",
         },
         "campaigns": {
             "from_name": "VARCHAR(120)",

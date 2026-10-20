@@ -16,6 +16,7 @@
 <tr><th>Nächster Versand</th><td>{{ dt(lead.next_send_at) }}</td></tr>
 <tr><th>Letzter Versand</th><td>{{ dt(lead.last_sent_at) }}</td></tr>
 <tr><th>Notiz</th><td>{{ lead.notes or '–' }}</td></tr>
+{% if lead.status == 'unsubscribed' or lead.unsubscribe_reason %}<tr><th>Abmeldegrund</th><td>{{ lead.unsubscribe_reason or 'keine Angabe' }}{% if lead.unsubscribe_comment %}<br><span class="small">{{ lead.unsubscribe_comment }}</span>{% endif %}{% if lead.unsubscribed_at %} <span class="muted small">({{ dt(lead.unsubscribed_at) }})</span>{% endif %}</td></tr>{% endif %}
 {% if lead.last_error %}<tr><th>Fehler</th><td class="error small">{{ lead.last_error }}</td></tr>{% endif %}
 </table>
 </div>

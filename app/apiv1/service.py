@@ -224,6 +224,8 @@ def lead_dict(l: Lead) -> dict:
         email_mx_ok=l.email_mx_ok, next_send_at=_iso(l.next_send_at), last_sent_at=_iso(l.last_sent_at),
         last_error=l.last_error, created_at=_iso(l.created_at),
     )
+    if l.status == "unsubscribed" or l.unsubscribe_reason:
+        d.update(unsubscribe_reason=l.unsubscribe_reason, unsubscribe_comment=l.unsubscribe_comment, unsubscribed_at=_iso(l.unsubscribed_at))
     return d
 
 
@@ -270,6 +272,11 @@ def get_stats(db: Session, call: Call, campaign_id: int) -> dict:
     )
     auto = sum(n for cls, n in replies.items() if cls in ("out_of_office", "auto_reply"))
     drafts = db.scalar(select(func.count(Message.id)).where(Message.lead_id.in_(lead_ids), Message.direction == "out", Message.status == "draft")) or 0
+    unsub_reasons = dict(
+        db.execute(
+            select(Lead.unsubscribe_reason, func.count()).where(Lead.campaign_id == c.id, Lead.status == "unsubscribed").group_by(Lead.unsubscribe_reason)
+        ).all()
+    )
     t = c.tenant
     return {
         "campaign_id": c.id,
@@ -278,6 +285,7 @@ def get_stats(db: Session, call: Call, campaign_id: int) -> dict:
         "leads_contacted": contacted,
         "bounces": statuses.get("bounced", 0),
         "unsubscribed": statuses.get("unsubscribed", 0),
+        "unsubscribe_reasons": {k or "ohne_angabe": v for k, v in unsub_reasons.items()},
         "replies": sum(replies.values()) - auto,
         "auto_replies": auto,
         "replies_by_class": {k or "unknown": v for k, v in replies.items()},

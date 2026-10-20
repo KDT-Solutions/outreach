@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from . import crypto
 from .config import get_settings
-from .models import Campaign, Event, Lead, Message, Suppression, Tenant
+from .models import Campaign, Event, Lead, Message, Suppression, Tenant, utcnow
 from .services import crawler, hunter, llm, mailtext, places, scheduling, signature, smtp2go, templating, verify, zammad
 
 log = logging.getLogger(__name__)
@@ -39,6 +39,8 @@ def suppress(db: Session, tenant_id: int, value: str, reason: str) -> None:
         db.add(Suppression(tenant_id=tenant_id, value=value, reason=reason))
     # stop every active lead with that address
     for lead in db.query(Lead).filter(Lead.tenant_id == tenant_id, Lead.email == value).all():
+        if reason == "unsubscribe" and lead.unsubscribed_at is None:
+            lead.unsubscribed_at = utcnow()
         if lead.status in ("needs_review", "scheduled", "in_sequence", "enriched"):
             lead.status = "unsubscribed" if reason == "unsubscribe" else "bounced" if reason in ("bounce", "spam") else "stopped"
             lead.next_send_at = None

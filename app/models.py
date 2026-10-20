@@ -193,6 +193,10 @@ class Lead(Base):
     unsubscribe_token: Mapped[str] = mapped_column(String(64), default=new_token, unique=True)
     notes: Mapped[str] = mapped_column(Text, default="")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Optional feedback from the unsubscribe page
+    unsubscribe_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    unsubscribe_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    unsubscribed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Soft delete (API): hidden from lists, never mailed again
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
