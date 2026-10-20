@@ -17,11 +17,12 @@ from ..auth import COOKIE, check_login, create_session, require_csrf, require_lo
 from ..config import get_settings
 from ..db import get_db
 from ..models import LEAD_STATUSES, Campaign, Event, Lead, Message, Suppression, Tenant, TenantSignature
-from ..services import scheduling, templating
+from ..services import mailtext, scheduling, templating
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 templates.env.globals["lead_statuses"] = LEAD_STATUSES
+templates.env.globals["split_quote"] = mailtext.split_quote
 
 
 def render(request: Request, name: str, sess: dict | None = None, **ctx):

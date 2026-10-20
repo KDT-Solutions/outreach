@@ -165,12 +165,18 @@ def classify_reply(subject: str, body: str) -> str:
     )
     msg = _client().messages.create(
         model=get_settings().anthropic_model,
-        max_tokens=10,
+        max_tokens=20,
         system=system,
         messages=[{"role": "user", "content": f"Betreff: {subject}\n\n{body[:3000]}"}],
     )
-    text = "".join(block.text for block in msg.content if getattr(block, "type", "") == "text").strip().lower()
-    for c in REPLY_CLASSES:
-        if c in text:
+    return parse_reply_class(_text_of(msg))
+
+
+def parse_reply_class(text: str) -> str:
+    """Map the model's answer to a class. Whole-word match, longest name first:
+    a substring check took "not_interested" for "interested"."""
+    words = re.findall(r"[a-z_]+", (text or "").lower().replace("-", "_"))
+    for c in sorted(REPLY_CLASSES, key=len, reverse=True):
+        if c in words:
             return c
     return "other"

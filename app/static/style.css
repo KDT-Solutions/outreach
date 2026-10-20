@@ -34,7 +34,7 @@ button.small{padding:3px 9px;font-size:12px}
 .stats{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0}
 .stat{background:var(--subtle);border:1px solid var(--line);border-radius:6px;padding:6px 10px;min-width:90px}
 .stat b{display:block;font-size:18px}
-pre.mail{white-space:pre-wrap;background:var(--subtle);border:1px solid var(--line);border-radius:6px;padding:12px;font:13px/1.5 inherit;margin:0}
+pre.mail{white-space:pre-wrap;background:var(--subtle);border:1px solid var(--line);border-radius:6px;padding:12px;font-family:inherit;font-size:13px;line-height:1.5;margin:0;overflow-wrap:anywhere}
 .draft{border-left:4px solid var(--warn)}
 .check{display:flex;align-items:center;gap:8px;font-weight:600;margin-top:12px}
 .check input{width:auto}
@@ -45,3 +45,4 @@ pre.mail{white-space:pre-wrap;background:var(--subtle);border:1px solid var(--li
 .excerpt{max-height:220px;overflow:auto;font-size:12.5px;color:var(--excerpt-text);background:var(--subtle);border:1px solid var(--line);padding:10px;border-radius:6px;white-space:pre-wrap}
 .theme-toggle{min-width:74px}
 nav .theme-toggle{margin-left:auto}nav .theme-toggle+form{margin-left:0}
+.quoted{margin-top:8px}.quoted summary{cursor:pointer}

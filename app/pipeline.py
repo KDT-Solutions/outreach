@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from . import crypto
 from .config import get_settings
 from .models import Campaign, Event, Lead, Message, Suppression, Tenant
-from .services import crawler, hunter, llm, places, scheduling, signature, smtp2go, templating, verify, zammad
+from .services import crawler, hunter, llm, mailtext, places, scheduling, signature, smtp2go, templating, verify, zammad
 
 log = logging.getLogger(__name__)
 
@@ -465,14 +465,11 @@ def poll_replies(db: Session) -> int:
             if lead is None:
                 continue
             art = zammad.first_article(tenant.zammad_url, token, tid) or {}
-            body = art.get("body") or ""
-            if (art.get("content_type") or "").startswith("text/html"):
-                from bs4 import BeautifulSoup
-
-                body = BeautifulSoup(body, "lxml").get_text(" ", strip=True)
+            body = mailtext.body_from_article(art)
             subject = t.get("title") or ""
             try:
-                cls = llm.classify_reply(subject, body)
+                # classify only the reply itself, not our own quoted mail below it
+                cls = llm.classify_reply(subject, mailtext.split_quote(body)[0])
             except Exception as exc:
                 log.warning("classify failed: %s", exc)
                 cls = "other"

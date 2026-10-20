@@ -43,7 +43,7 @@
 {% for m in lead.messages %}
 <div class="card {{ 'draft' if m.status=='draft' }}">
 <p class="small muted">{{ 'Eingang' if m.direction=='in' else 'Schritt ' ~ (m.step+1) }} · <span class="badge {{ 'ok' if m.status in ('sent','received') else 'warn' if m.status=='draft' else 'info' if m.status=='approved' else 'bad' }}">{{ m.status }}</span>
-{% if m.classification %}<span class="badge info">{{ m.classification }}</span>{% endif %}
+{% if m.classification %}<span class="badge {{ {'interested':'ok','question':'warn','not_interested':'bad','unsubscribe':'bad','bounce':'bad'}.get(m.classification, 'info') }}">{{ m.classification }}</span>{% endif %}
 {% if m.sent_at %}· gesendet {{ dt(m.sent_at) }}{% endif %}{% if m.from_email %}· von {{ m.from_email }}{% endif %}{% if m.error %} · <span class="error">{{ m.error }}</span>{% endif %}</p>
 {% if m.status == 'draft' %}
 <form method="post" action="/messages/{{ m.id }}/decide"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/leads/{{ lead.id }}">
@@ -53,7 +53,10 @@
 </form>
 {% else %}
 <p><b>{{ m.subject }}</b></p>
-<pre class="mail">{{ m.body }}</pre>
+{% if m.direction == 'in' %}{% set parts = split_quote(m.body or '') %}
+<pre class="mail">{{ parts[0] }}</pre>
+{% if parts[1] %}<details class="quoted"><summary class="small muted">Zitierter Verlauf anzeigen</summary><pre class="mail">{{ parts[1] }}</pre></details>{% endif %}
+{% else %}<pre class="mail">{{ m.body }}</pre>{% endif %}
 {% endif %}
 </div>
 {% else %}<p class="muted">Noch keine Nachrichten.</p>{% endfor %}
