@@ -62,6 +62,12 @@ def main() -> None:
     interval = get_settings().worker_interval_seconds
     log.info("worker started, interval %ss", interval)
     healthcheck.beat()
+    try:
+        with SessionLocal() as db:
+            n = pipeline.repair_replies_once(db)
+            log.info("reply repair: %d reclassified", n)
+    except Exception:
+        log.exception("reply repair failed")
     while True:
         started = time.time()
         try:

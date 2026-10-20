@@ -52,3 +52,37 @@ def test_quote_markers(line):
 
 def test_plain_reply_without_quote():
     assert mailtext.split_quote("Gerne mehr Infos.") == ("Gerne mehr Infos.", "")
+
+
+def test_repair_replies_once(monkeypatch, db_data):
+    from app import crypto, pipeline
+    from app.db import SessionLocal
+    from app.models import Event, Lead, Message, Tenant
+    from app.services import zammad
+    from tests.test_replies import HTML
+
+    notes = []
+    monkeypatch.setattr(zammad, "first_article", lambda url, tok, tid: {"body": HTML, "content_type": "text/html"})
+    monkeypatch.setattr(zammad, "add_note", lambda url, tok, tid, body: notes.append((tid, body)) or True)
+    seen = []
+    monkeypatch.setattr(llm, "classify_reply", lambda subject, body: seen.append(body) or "not_interested")
+    with SessionLocal() as db:
+        t = db.get(Tenant, db_data["alpha"])
+        t.zammad_url = "https://zammad.example"
+        t.zammad_token_enc = crypto.encrypt("tok")
+        lead = Lead(tenant_id=t.id, campaign_id=db_data["campaign_alpha"], company="Regio", email="r@regio.example", status="replied")
+        db.add(lead)
+        db.flush()
+        db.add(Message(lead_id=lead.id, tenant_id=t.id, direction="in", step=1, subject="AW", body="alles in einer Zeile",
+                       status="received", classification="interested", zammad_ticket_id=42))
+        db.commit()
+        assert pipeline.repair_replies_once(db) == 1
+        m = db.query(Message).filter_by(zammad_ticket_id=42).one()
+        assert m.classification == "not_interested"
+        assert "Herr Thurnherr\n" in m.body
+        assert "Von:" not in seen[0]  # classified without the quote
+        assert notes == [(42, notes[0][1])] and "interested auf not_interested" in notes[0][1]
+        # second run does nothing
+        assert pipeline.repair_replies_once(db) == 0
+        assert len(notes) == 1
+        assert db.query(Event).filter_by(kind="migration").count() == 1

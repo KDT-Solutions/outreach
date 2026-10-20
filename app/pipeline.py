@@ -550,3 +550,51 @@ def handle_webhook(db: Session, tenant: Tenant, payload: dict) -> str:
         return f"suppressed {target} ({reason})"
     log_event(db, f"webhook_{event or 'unknown'}", f"{target or '-'} ({email_id or message_id or '-'})", tenant.id, lead.id if lead else None)
     return "ok"
+
+
+# ---------------------------------------------------------------- one-off repair
+REPLY_REPAIR_MARK = "replies_v1"
+
+
+def repair_replies_once(db: Session) -> int:
+    """Replies stored before the fix lost their line breaks, and every rejection was
+    stored as "interested" (substring match). Re-read each body from Zammad, classify
+    again and leave an internal note on the ticket when the class changes.
+    Runs once per database, marked by a "migration" event."""
+    if db.scalar(select(Event.id).where(Event.kind == "migration", Event.detail == REPLY_REPAIR_MARK)):
+        return 0
+    fixed = 0
+    msgs = db.query(Message).filter(Message.direction == "in", Message.zammad_ticket_id.isnot(None)).all()
+    for m in msgs:
+        tenant = db.get(Tenant, m.tenant_id)
+        token = crypto.decrypt(tenant.zammad_token_enc) if tenant and tenant.zammad_url else None
+        if not token:
+            continue
+        try:
+            art = zammad.first_article(tenant.zammad_url, token, m.zammad_ticket_id)
+            if art:
+                m.body = mailtext.body_from_article(art)[:8000]
+            old = m.classification
+            new = llm.classify_reply(m.subject or "", mailtext.split_quote(m.body or "")[0])
+        except Exception as exc:
+            log.warning("repair reply %s: %s", m.id, exc)
+            db.rollback()
+            continue
+        if new != old:
+            m.classification = new
+            fixed += 1
+            log_event(db, "reply_reclassified", f"{old} -> {new}", m.tenant_id, m.lead_id)
+            if new in ("unsubscribe", "bounce") and m.lead and (m.lead.email or m.from_email):
+                suppress(db, m.tenant_id, m.lead.email or m.from_email, new)
+            try:
+                zammad.add_note(
+                    tenant.zammad_url, token, m.zammad_ticket_id,
+                    f"Outreach: Einstufung korrigiert von {old} auf {new} "
+                    f"(Fehler in der automatischen Einstufung, inzwischen behoben).",
+                )
+            except Exception as exc:
+                log.warning("Zammad note failed: %s", exc)
+        db.commit()
+    log_event(db, "migration", REPLY_REPAIR_MARK)
+    db.commit()
+    return fixed
