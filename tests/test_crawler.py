@@ -4,7 +4,7 @@ from app.services import crawler
 
 
 def _emails(html: str) -> set[str]:
-    return crawler._extract_emails(html, BeautifulSoup(html, "lxml"))
+    return set(crawler._extract_emails(html, BeautifulSoup(html, "lxml")))
 
 
 def test_url_encoded_mailto_is_decoded():

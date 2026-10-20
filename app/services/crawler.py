@@ -67,27 +67,28 @@ def _text_of(soup: BeautifulSoup, limit: int) -> str:
     return text[:limit]
 
 
-def _extract_emails(html: str, soup: BeautifulSoup) -> set[str]:
-    found: set[str] = set()
+def _extract_emails(html: str, soup: BeautifulSoup) -> dict[str, None]:
+    """Addresses in the order they appear (mailto links first); dict = ordered set."""
+    found: dict[str, None] = {}
     for a in soup.select('a[href^="mailto:"]'):
         href = a.get("href", "")
         # mailto links are URL-encoded: "mailto:%20info@firma.ch" has a leading space
         addr = unquote(href[7:].split("?")[0]).strip()
         if addr:
-            found.add(addr.lower())
+            found[addr.lower()] = None
     # decode first: raw "%20info@firma.ch" in an href would otherwise yield "20info@firma.ch"
     for m in EMAIL_RE.findall(unquote(html)):
-        found.add(m.lower())
+        found[m.lower()] = None
     for m in OBFUSCATED_RE.findall(html):
-        found.add(f"{m[0]}@{m[1]}.{m[2]}".lower())
-    clean = set()
+        found[f"{m[0]}@{m[1]}.{m[2]}".lower()] = None
+    clean: dict[str, None] = {}
     for e in found:
         if e.endswith(SKIP_EMAIL_SUFFIX) or any(p in e for p in SKIP_EMAIL_PARTS):
             continue
         e = e.strip(" .,;:")
         if len(e) > 100 or e.count("@") != 1 or not STRICT_EMAIL_RE.match(e):
             continue
-        clean.add(e)
+        clean[e] = None
     return clean
 
 
@@ -116,17 +117,37 @@ def _location_match(email: str, place_hint: str | None) -> bool:
     return parts[1] in words
 
 
-def rank_emails(emails: set[str], domain: str | None, place_hint: str | None = None) -> list[str]:
+# order of generic mailboxes when generic addresses are preferred (API search/enrich)
+GENERIC_PREFERENCE = ("info", "kontakt", "contact", "office", "mail")
+
+
+def rank_emails(
+    emails, domain: str | None, place_hint: str | None = None, *, prefer_generic: bool = False, own_domain_only: bool = False
+) -> list[str]:
     """Own-domain first. A single personal address on the company domain beats info@;
     with several personal addresses we cannot tell who is who, so info@ comes first.
     Among generic addresses: one for the lead's location (info.reinach@) first, then
-    plain info@, then other generic ones."""
+    plain info@, then other generic ones.
+
+    prefer_generic: generic mailboxes always first (info@, kontakt@, office@, mail@, then
+    other generic ones), personal addresses after them in the order found on the site.
+    own_domain_only: drop addresses on other domains (agency, web designer, gmail)."""
     def same(e: str) -> bool:
         dom = e.partition("@")[2]
         return bool(domain and (dom == domain or dom.endswith("." + domain)))
 
+    emails = list(emails)
     own = [e for e in emails if same(e)]
-    other = [e for e in emails if not same(e)]
+    other = [] if own_domain_only else [e for e in emails if not same(e)]
+    if prefer_generic:
+        def generic_rank(e: str) -> tuple:
+            head = (_generic_parts(e) or ("", ""))[0]
+            pref = GENERIC_PREFERENCE.index(head) if head in GENERIC_PREFERENCE else len(GENERIC_PREFERENCE)
+            return (not _location_match(e, place_hint), pref, (_generic_parts(e) or ("", ""))[1] != "")
+
+        generic = sorted((e for e in own if is_generic(e)), key=generic_rank)  # stable: keeps site order
+        return generic + [e for e in own if not is_generic(e)] + other
+
     own_personal = sorted(e for e in own if not is_generic(e))
     own_generic = sorted(
         (e for e in own if is_generic(e)),
@@ -183,9 +204,20 @@ def pick_for_contact(candidates: list[str], contact_name: str | None) -> str | N
     return None
 
 
-def crawl(website: str, place_hint: str | None = None) -> CrawlResult:
-    """place_hint: the lead's postal address, to prefer info.<ort>@ for multi-site companies."""
+def crawl(
+    website: str,
+    place_hint: str | None = None,
+    *,
+    prefer_generic: bool = False,
+    own_domain_only: bool = False,
+    max_pages: int | None = None,
+    timeout: float | None = None,
+) -> CrawlResult:
+    """place_hint: the lead's postal address, to prefer info.<ort>@ for multi-site companies.
+    max_pages counts the start page (default 5), timeout is per page (default CRAWL_TIMEOUT).
+    prefer_generic / own_domain_only: see rank_emails."""
     s = get_settings()
+    subpages = (max_pages - 1) if max_pages else 4
     res = CrawlResult(domain=domain_of(website))
     if not website:
         res.error = "keine Webseite"
@@ -194,9 +226,9 @@ def crawl(website: str, place_hint: str | None = None) -> CrawlResult:
         website = "https://" + website
 
     headers = {"User-Agent": s.crawl_user_agent, "Accept-Language": "de-CH,de;q=0.9,en;q=0.5"}
-    emails: set[str] = set()
+    emails: dict[str, None] = {}
     try:
-        with httpx.Client(timeout=s.crawl_timeout, follow_redirects=True, headers=headers) as client:
+        with httpx.Client(timeout=timeout or s.crawl_timeout, follow_redirects=True, headers=headers) as client:
             html, base = _fetch(client, website, s.crawl_max_bytes)
             res.pages_fetched += 1
             if html is None:
@@ -205,10 +237,10 @@ def crawl(website: str, place_hint: str | None = None) -> CrawlResult:
             res.domain = domain_of(base) or res.domain
             soup = BeautifulSoup(html, "lxml")
             emails |= _extract_emails(html, soup)
-            links = _contact_links(soup, base)
+            links = _contact_links(soup, base, contact_first=prefer_generic)
             res.site_excerpt = _text_of(BeautifulSoup(html, "lxml"), 3000)
 
-            for url in links[:4]:
+            for url in links[:max(0, subpages)]:
                 sub, _ = _fetch(client, url, s.crawl_max_bytes)
                 if sub is None:
                     continue
@@ -220,7 +252,7 @@ def crawl(website: str, place_hint: str | None = None) -> CrawlResult:
     except Exception as exc:  # network errors, TLS, etc.
         res.error = f"{type(exc).__name__}: {exc}"[:300]
 
-    res.emails = rank_emails(emails, res.domain, place_hint)
+    res.emails = rank_emails(emails, res.domain, place_hint, prefer_generic=prefer_generic, own_domain_only=own_domain_only)
     res.best_email = res.emails[0] if res.emails else None
     return res
 
@@ -250,7 +282,9 @@ def _fetch(client: httpx.Client, url: str, max_bytes: int) -> tuple[str | None, 
         return None, url
 
 
-def _contact_links(soup: BeautifulSoup, base: str) -> list[str]:
+def _contact_links(soup: BeautifulSoup, base: str, contact_first: bool = False) -> list[str]:
+    """Same-host links that look like Impressum/contact/about pages, most useful first.
+    contact_first: Kontakt before management pages (when generic mailboxes are wanted)."""
     base_host = urlparse(base).hostname or ""
     seen: list[str] = []
     for a in soup.find_all("a", href=True):
@@ -273,9 +307,11 @@ def _contact_links(soup: BeautifulSoup, base: str) -> list[str]:
         path = urlparse(u).path.lower()
         if "impressum" in path or "imprint" in path or "mentions" in path:
             return 0
-        if any(h in path for h in MANAGEMENT_HINTS):
+        if contact_first and ("kontakt" in path or "contact" in path):
             return 1
-        return 2
+        if any(h in path for h in MANAGEMENT_HINTS):
+            return 2
+        return 3
 
     seen.sort(key=prio)
     return seen

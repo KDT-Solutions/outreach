@@ -16,11 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .. import __version__
 from ..config import get_settings
-from . import schemas, service
+from . import prospect, schemas, service
 from .service import ApiError, Call
 
 INSTRUCTIONS = """Outreach: B2B-Mailkampagnen pro Mandant.
-Ablauf: list_tenants -> create_campaign -> import_leads -> set_sequence -> preview_email / send_test -> start_campaign -> get_stats.
+Ablauf: list_tenants -> create_campaign -> import_leads / search_leads / enrich_leads -> set_sequence -> preview_email / send_test -> start_campaign -> get_stats.
+Leads finden: search_leads sucht Firmen über Google Places (query + region, Umkreis radius_km) und sucht deren Adresse auf der Webseite; enrich_leads ergänzt eine eigene Firmenliste (firma, optional ort, plz, website) um die Adresse. Ohne confirm liefert search_leads nur die Trefferliste (Firma, Ort, Website), enrich_leads die gefundenen Adressen, beide ohne zu schreiben. Mit confirm: Treffer mit Adresse werden Leads mit Status enriched, ohne Adresse no_email (sichtbar, werden nicht angeschrieben). Bevorzugt werden allgemeine Adressen (info@, kontakt@, office@, mail@) der eigenen Domain; Duplikate (gleiche E-Mail oder gleicher Google-Eintrag beim Mandanten, Sperrliste) werden gemeldet und nicht angelegt. Höchstens 200 Einträge pro Aufruf, Google liefert pro Suche höchstens 60 Treffer. Ein Aufruf mit Crawling kann einige Minuten dauern.
 Alle schreibenden Werkzeuge liefern ohne confirm=true nur eine Vorschau und ändern nichts.
 start_campaign braucht zusätzlich confirm_send=true. Schritte sind 1-basiert.
 Platzhalter in Betreff und Text: {{anrede}}, {{vorname}}, {{nachname}}, {{firma}}, {{ort}}, {{email}}. body_text ist Klartext, kein HTML.
@@ -257,6 +258,35 @@ def approve_drafts(ctx: Context, campaign_id: int, lead_ids: list[int] | None = 
 def reject_draft(ctx: Context, draft_id: int, confirm: Confirm = False) -> dict:
     data = _model(schemas.Confirm, confirm=confirm)
     return _run(ctx, "reject_draft", lambda db, call: service.reject_draft(db, call, draft_id, data), write=True)
+
+
+class EnrichArg(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    firma: str
+    ort: str | None = None
+    plz: str | None = None
+    website: str | None = Field(None, description="leer: wird über Google Places gesucht (nur bei gleichem Firmennamen übernommen)")
+
+
+@mcp.tool(description="Firmen über Google Places suchen (query + region, Umkreis radius_km) und deren Mailadresse auf der Webseite finden. Ohne confirm nur die Trefferliste; mit confirm werden Treffer mit Adresse als Lead (enriched) angelegt, ohne Adresse als no_email.")
+def search_leads(
+    ctx: Context,
+    campaign_id: int,
+    query: str,
+    region: str = "Schweiz",
+    radius_km: int = 25,
+    limit: int = 50,
+    language: str = "de",
+    confirm: Confirm = False,
+) -> dict:
+    data = _model(schemas.LeadSearch, query=query, region=region, radius_km=radius_km, limit=limit, language=language, confirm=confirm)
+    return _run(ctx, "search_leads", lambda db, call: prospect.search_leads(db, call, campaign_id, data), write=True)
+
+
+@mcp.tool(description="Eigene Firmenliste um die Mailadresse ergänzen: Webseite (falls nicht angegeben über Google Places), Impressum/Kontakt crawlen, Hunter als Rückfall, MX-Prüfung. Ohne confirm nur Vorschau mit den gefundenen Adressen.")
+def enrich_leads(ctx: Context, campaign_id: int, leads: list[EnrichArg], confirm: Confirm = False) -> dict:
+    data = _model(schemas.LeadEnrich, leads=[l.model_dump(exclude_unset=True) for l in leads], confirm=confirm)
+    return _run(ctx, "enrich_leads", lambda db, call: prospect.enrich_leads(db, call, campaign_id, data), write=True)
 
 
 def allowed_hosts() -> list[str]:

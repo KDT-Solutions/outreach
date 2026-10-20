@@ -137,6 +137,30 @@ class LeadImport(_Strict):
     confirm: bool = False
 
 
+MAX_PROSPECT = 200
+
+
+class LeadSearch(_Strict):
+    query: Line(200)
+    region: Line(120) = Field("Schweiz", description="Ort, Kanton, PLZ oder 'Schweiz'")
+    radius_km: int = Field(25, ge=1, le=300)
+    limit: int = Field(50, ge=1, le=MAX_PROSPECT)
+    language: Lang = "de"
+    confirm: bool = False
+
+
+class EnrichEntry(_Strict):
+    firma: Line(200)
+    ort: OptLine(120) = None
+    plz: Annotated[str | None, Field(default=None, pattern=r"^\d{4,5}$")] = None
+    website: OptLine(300) = None
+
+
+class LeadEnrich(_Strict):
+    leads: list[EnrichEntry] = Field(min_length=1, max_length=MAX_PROSPECT)
+    confirm: bool = False
+
+
 class LeadUpdate(_Strict):
     firma: Line(200) | None = None
     anrede: OptLine(120) = None

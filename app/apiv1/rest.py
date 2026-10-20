@@ -7,7 +7,7 @@ from functools import partial
 from fastapi import APIRouter, Query, Request
 from pydantic import ValidationError
 
-from . import schemas, service
+from . import prospect, schemas, service
 from .service import Call
 
 router = APIRouter()
@@ -136,3 +136,14 @@ def approve_drafts(request: Request, campaign_id: int, body: schemas.ApproveDraf
 @router.post("/drafts/{draft_id}/reject", summary="reject_draft")
 def reject_draft(request: Request, draft_id: int, body: schemas.Confirm):
     return _run(request, "reject_draft", partial(service.reject_draft, draft_id=draft_id, data=body), write=True)
+
+
+# ---------------------------------------------------------------- finding leads
+@router.post("/campaigns/{campaign_id}/leads/search", summary="search_leads")
+def search_leads(request: Request, campaign_id: int, body: schemas.LeadSearch):
+    return _run(request, "search_leads", partial(prospect.search_leads, campaign_id=campaign_id, data=body), write=True)
+
+
+@router.post("/campaigns/{campaign_id}/leads/enrich", summary="enrich_leads")
+def enrich_leads(request: Request, campaign_id: int, body: schemas.LeadEnrich):
+    return _run(request, "enrich_leads", partial(prospect.enrich_leads, campaign_id=campaign_id, data=body), write=True)

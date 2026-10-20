@@ -140,6 +140,8 @@ Fehler sind immer JSON:
 | `get_campaign` | `GET /api/v1/campaigns/{id}` |
 | `create_campaign` | `POST /api/v1/campaigns` |
 | `import_leads` | `POST /api/v1/campaigns/{id}/leads/import` |
+| `search_leads` | `POST /api/v1/campaigns/{id}/leads/search` |
+| `enrich_leads` | `POST /api/v1/campaigns/{id}/leads/enrich` |
 | `list_leads` | `GET /api/v1/campaigns/{id}/leads?status=&limit=&offset=` |
 | `update_lead` | `PATCH /api/v1/leads/{id}` |
 | `delete_lead` | `DELETE /api/v1/leads/{id}?confirm=true` (Soft-Delete) |
@@ -172,6 +174,49 @@ Regeln:
 - `auto_approve` beim Anlegen der Kampagne entscheidet, ob gerenderte Mails ohne Freigabe in der
   Oberfläche gesendet werden (Standard: nein).
 - Antworten in `get_stats` stammen aus dem Zammad-Abgleich des Workers (`replies_source.last_poll`).
+
+### Leads finden: search_leads und enrich_leads
+
+Beide nutzen dieselbe Google-Places-Suche und denselben Crawler wie die Weboberfläche, im
+API-Modus mit diesen Regeln:
+
+- Pro Domain höchstens 3 Seiten (Startseite mit Footer, dann Impressum, Kontakt, Über uns),
+  10 s Timeout pro Seite, User-Agent aus `CRAWL_USER_AGENT`.
+- Allgemeine Adressen zuerst (`info@`, `kontakt@`, `office@`, `mail@`), sonst die erste Adresse
+  der eigenen Domain. Adressen anderer Domains (Webagentur, Freemail) werden verworfen.
+- Ohne Treffer auf der Webseite Hunter.io als Rückfall (wenn `HUNTER_API_KEY` gesetzt ist),
+  danach MX-Prüfung.
+- Duplikate wie bei `import_leads` (gleiche E-Mail beim Mandanten, Sperrliste) und zusätzlich
+  derselbe Google-Eintrag; sie werden gemeldet und nicht angelegt.
+- Treffer mit Adresse werden Leads mit Status `enriched` (`email_source` `crawler` oder
+  `hunter`), ohne Adresse `no_email` mit Notiz "keine Adresse gefunden". Fehler einzelner
+  Einträge stehen im Ergebnis (`status: error`), solche Einträge werden nicht gespeichert und
+  können erneut versucht werden.
+- Höchstens 200 Einträge pro Aufruf. Google Places liefert pro Suche höchstens 60 Treffer.
+
+`search_leads`: `query` und `region` (Ort, Kanton, PLZ oder `Schweiz`), `radius_km` (Standard 25),
+`limit` (Standard 50), `language` (Standard `de`). Der Mittelpunkt der Region kommt aus derselben
+Places-Suche; Treffer ausserhalb des Umkreises fallen weg. Ohne `confirm` nur die Trefferliste
+(Firma, Ort, Website), ohne zu crawlen und ohne zu schreiben. Für die Website ruft schon die
+Vorschau pro Treffer Place Details auf (kostenpflichtige SKU nach dem Freikontingent).
+
+`enrich_leads`: Liste mit `firma` (Pflicht) und optional `ort`, `plz`, `website`. Ohne Website
+wird sie über Places gesucht (`firma plz ort`) und nur bei gleichem Firmennamen übernommen.
+Ohne `confirm` crawlt der Aufruf und zeigt die gefundenen Adressen, schreibt aber nichts.
+
+Ein Aufruf mit Crawling läuft parallel (`API_PROSPECT_WORKERS`, Standard 8) und hat ein
+Zeitbudget (`API_PROSPECT_DEADLINE_SECONDS`, Standard 240). Der Reverse Proxy muss für
+`/api/v1` und `/mcp` entsprechend lange warten (`proxy_read_timeout` mindestens 300 s).
+
+```
+curl -sS -X POST "$API/campaigns/12/leads/search" -H "$AUTH" -H "Content-Type: application/json" \
+  -d '{"query": "Schlüsselservice", "region": "<Ort>", "radius_km": 20, "limit": 30}'
+
+curl -sS -X POST "$API/campaigns/12/leads/enrich" -H "$AUTH" -H "Content-Type: application/json" -d '{
+  "leads": [{"firma": "Muster AG", "ort": "<Ort>", "plz": "<PLZ>"}, {"firma": "Beispiel GmbH", "website": "https://www.example.com"}],
+  "confirm": true
+}'
+```
 
 ### Signaturen pro Sprache und Kampagne
 
