@@ -112,3 +112,32 @@ def test_backfill_old_unsubscribe(db_data):
     dbmod._backfill_unsubscribes()
     lead = _get(lead_id)
     assert lead.unsubscribed_at is not None and lead.unsubscribe_source == "link"
+
+
+def test_unsuppress_lead(client, db_data):
+    from app.models import Campaign
+    from app.pipeline import suppress
+
+    with SessionLocal() as db:
+        c = db.get(Campaign, db_data["campaign_alpha"])
+        c.steps = [{"subject": "a", "body_text": "b", "delay_days": 0}, {"subject": "c", "body_text": "d", "delay_days": 8}]
+        db.commit()
+    lead_id, _ = _lead(db_data)
+    with SessionLocal() as db:
+        lead = db.get(Lead, lead_id)
+        lead.step = 1
+        from datetime import datetime, timezone
+        lead.last_sent_at = datetime.now(timezone.utc)
+        db.commit()
+        suppress(db, db_data["alpha"], "kunde@example.com", "unsubscribe")
+        db.commit()
+    preview = client.post(f"/api/v1/leads/{lead_id}/unsuppress", json={}, headers=AUTH).json()
+    assert preview.get("confirmed") is not True and _get(lead_id).status == "unsubscribed"
+    r = client.post(f"/api/v1/leads/{lead_id}/unsuppress", json={"confirm": True}, headers=AUTH)
+    assert r.status_code == 200, r.text
+    lead = _get(lead_id)
+    assert lead.status == "in_sequence" and lead.next_send_at is not None and lead.unsubscribed_at is None
+    with SessionLocal() as db:
+        assert db.query(Suppression).count() == 0
+    # a second call is refused: the lead is no longer unsubscribed
+    assert client.post(f"/api/v1/leads/{lead_id}/unsuppress", json={"confirm": True}, headers=AUTH).status_code == 409
