@@ -90,3 +90,25 @@ def test_stats_and_lead_show_reason(client, db_data):
     leads = client.get(f"/api/v1/campaigns/{db_data['campaign_alpha']}/leads", headers=AUTH).json()
     row = next(l for l in leads["leads"] if l["id"] == lead_id)
     assert row["unsubscribe_reason"] == "falsche_person"
+
+
+def test_source_recorded(db_data):
+    lead_id, token = _lead(db_data)
+    with TestClient(ui_app, base_url="https://testserver") as c:
+        c.post(f"/u/{token}/abmelden", data={})
+    assert _get(lead_id).unsubscribe_source == "page"
+
+
+def test_backfill_old_unsubscribe(db_data):
+    from app import db as dbmod
+    from app.pipeline import suppress
+
+    lead_id, _ = _lead(db_data)
+    with SessionLocal() as db:
+        suppress(db, db_data["alpha"], "kunde@example.com", "unsubscribe")
+        lead = db.get(Lead, lead_id)
+        lead.unsubscribed_at = None  # state before the column existed
+        db.commit()
+    dbmod._backfill_unsubscribes()
+    lead = _get(lead_id)
+    assert lead.unsubscribed_at is not None and lead.unsubscribe_source == "link"

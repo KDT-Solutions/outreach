@@ -21,6 +21,26 @@ def init_db() -> None:
 
     Base.metadata.create_all(engine)
     _ensure_columns()
+    _backfill_unsubscribes()
+
+
+def _backfill_unsubscribes() -> None:
+    """Unsubscribes from before unsubscribed_at existed: take the time from the
+    suppression entry and the source from the SMTP2GO webhook event, if any.
+    Idempotent: only touches rows without unsubscribed_at."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE leads SET unsubscribed_at = (SELECT s.created_at FROM suppressions s "
+            "WHERE s.tenant_id = leads.tenant_id AND s.value = lower(leads.email) AND s.reason = 'unsubscribe') "
+            "WHERE status = 'unsubscribed' AND unsubscribed_at IS NULL AND email IS NOT NULL"
+        ))
+        conn.execute(text(
+            "UPDATE leads SET unsubscribe_source = CASE WHEN EXISTS (SELECT 1 FROM events e "
+            "WHERE e.lead_id = leads.id AND e.kind = 'webhook_unsubscribe') THEN 'webhook' ELSE 'link' END "
+            "WHERE status = 'unsubscribed' AND unsubscribe_source IS NULL"
+        ))
 
 
 def _ensure_columns() -> None:
@@ -40,6 +60,7 @@ def _ensure_columns() -> None:
             "unsubscribe_reason": "VARCHAR(40)",
             "unsubscribe_comment": "TEXT",
             "unsubscribed_at": "TIMESTAMP WITH TIME ZONE",
+            "unsubscribe_source": "VARCHAR(20)",
         },
         "campaigns": {
             "from_name": "VARCHAR(120)",

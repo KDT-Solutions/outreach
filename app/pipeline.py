@@ -548,6 +548,8 @@ def handle_webhook(db: Session, tenant: Tenant, payload: dict) -> str:
     reason = smtp2go.SUPPRESS_EVENTS.get(event or "")
     if reason and target:
         suppress(db, tenant.id, target, reason)
+        if reason == "unsubscribe" and lead is not None and lead.unsubscribe_source is None:
+            lead.unsubscribe_source = "webhook"
         log_event(db, f"webhook_{event}", f"{target} ({email_id or message_id or '-'})", tenant.id, lead.id if lead else None)
         return f"suppressed {target} ({reason})"
     log_event(db, f"webhook_{event or 'unknown'}", f"{target or '-'} ({email_id or message_id or '-'})", tenant.id, lead.id if lead else None)

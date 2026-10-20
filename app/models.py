@@ -197,6 +197,8 @@ class Lead(Base):
     unsubscribe_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
     unsubscribe_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     unsubscribed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # page (button), one-click (mail client), webhook (SMTP2GO), link (old direct GET, before the page)
+    unsubscribe_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Soft delete (API): hidden from lists, never mailed again
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

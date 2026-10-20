@@ -100,6 +100,8 @@ def _unsubscribe(db: Session, lead: Lead, source: str) -> None:
         pipeline.suppress(db, lead.tenant_id, lead.email, "unsubscribe")
     if lead.unsubscribed_at is None:
         lead.unsubscribed_at = utcnow()
+    if lead.unsubscribe_source is None:
+        lead.unsubscribe_source = source
     pipeline.log_event(db, "unsubscribe", f"{lead.email or '-'} via {source}", lead.tenant_id, lead.id)
 
 

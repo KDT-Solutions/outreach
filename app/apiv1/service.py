@@ -225,7 +225,7 @@ def lead_dict(l: Lead) -> dict:
         last_error=l.last_error, created_at=_iso(l.created_at),
     )
     if l.status == "unsubscribed" or l.unsubscribe_reason:
-        d.update(unsubscribe_reason=l.unsubscribe_reason, unsubscribe_comment=l.unsubscribe_comment, unsubscribed_at=_iso(l.unsubscribed_at))
+        d.update(unsubscribe_reason=l.unsubscribe_reason, unsubscribe_comment=l.unsubscribe_comment, unsubscribed_at=_iso(l.unsubscribed_at), unsubscribe_source=l.unsubscribe_source)
     return d
 
 
