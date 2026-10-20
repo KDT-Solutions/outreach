@@ -6,7 +6,7 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from . import pipeline
+from . import healthcheck, pipeline
 from .config import get_settings
 from .db import SessionLocal, init_db
 from .models import Campaign
@@ -61,12 +61,20 @@ def main() -> None:
     init_db()
     interval = get_settings().worker_interval_seconds
     log.info("worker started, interval %ss", interval)
+    healthcheck.beat()
+    try:
+        with SessionLocal() as db:
+            n = pipeline.repair_replies_once(db)
+            log.info("reply repair: %d reclassified", n)
+    except Exception:
+        log.exception("reply repair failed")
     while True:
         started = time.time()
         try:
             tick()
         except Exception:
             log.exception("tick failed")
+        healthcheck.beat()
         time.sleep(max(5, interval - (time.time() - started)))
 
 

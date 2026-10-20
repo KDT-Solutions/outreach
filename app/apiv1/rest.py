@@ -68,6 +68,11 @@ def update_lead(request: Request, lead_id: int, body: schemas.LeadUpdate):
     return _run(request, "update_lead", partial(service.update_lead, lead_id=lead_id, data=body), write=True)
 
 
+@router.post("/leads/{lead_id}/unsuppress", summary="unsuppress_lead")
+def unsuppress_lead(request: Request, lead_id: int, body: schemas.Confirm):
+    return _run(request, "unsuppress_lead", partial(service.unsuppress_lead, lead_id=lead_id, data=body), write=True)
+
+
 @router.delete("/leads/{lead_id}", summary="delete_lead")
 def delete_lead(request: Request, lead_id: int, confirm: bool = False):
     return _run(request, "delete_lead", partial(service.delete_lead, lead_id=lead_id, data=schemas.Confirm(confirm=confirm)), write=True)

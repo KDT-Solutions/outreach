@@ -32,11 +32,34 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=key)
 
 
+class NoJsonError(ValueError):
+    """The model answered, but not with a usable JSON object."""
+
+
+# room for the model's reasoning plus the JSON; 1200 cut answers off mid-JSON
+MAX_TOKENS = 4000
+
+
 def _json_from(text: str) -> dict:
-    m = re.search(r"\{.*\}", text, re.S)
-    if not m:
-        raise ValueError("Keine JSON-Antwort vom Modell")
-    return json.loads(m.group(0))
+    """First JSON object in the text; tolerates code fences and text around it."""
+    text = re.sub(r"```(?:json)?", "", text or "")
+    decoder = json.JSONDecoder()
+    for m in re.finditer(r"\{", text):
+        try:
+            obj, _ = decoder.raw_decode(text, m.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    raise NoJsonError("Keine JSON-Antwort vom Modell")
+
+
+def _text_of(msg) -> str:
+    return "".join(block.text for block in msg.content if getattr(block, "type", "") == "text")
+
+
+def _excerpt(text: str, n: int = 300) -> str:
+    return " ".join((text or "").split())[:n]
 
 
 def write_mail(tenant: Tenant, campaign: Campaign, lead: Lead, step: int, previous: list[tuple[str, str]]) -> Draft:
@@ -76,6 +99,8 @@ Adresse: {lead.address or '-'}
 Webseite: {lead.website or '-'}
 Google-Kategorien: {lead.place_types or '-'}
 Bekannter Ansprechpartner: {lead.contact_name or 'unbekannt'}
+Empfängeradresse: {lead.email or '-'}
+Vorgegebene Anrede: {lead.salutation or 'keine'}
 
 Auszug Startseite:
 {(lead.site_excerpt or '')[:2500]}
@@ -86,20 +111,39 @@ Auszug Impressum/Kontakt:
 
 Aufgabe:
 1. Finde im Impressum/Kontakt-Auszug, falls vorhanden, den Namen der Inhaberin/des Inhabers bzw. der Geschäftsführung (Vor- und Nachname). Wenn unklar: null.
-2. Bilde daraus die Anrede (z.B. "Guten Tag Herr Müller" oder "Guten Tag Frau Keller"); wenn kein Name oder Geschlecht unklar: "Guten Tag".
+2. Ist eine Anrede vorgegeben, übernimm sie unverändert. Sonst bilde sie aus dem bekannten Ansprechpartner bzw. dem gefundenen Namen (z.B. "Guten Tag Herr Müller" oder "Guten Tag Frau Keller"); passt der Name nicht sicher zur Empfängeradresse, kein Name oder Geschlecht unklar: "Guten Tag".
 3. Schreibe Betreff und Mailtext. Der Text beginnt mit der Anrede.
 
 JSON-Format:
 {{"contact_name": string|null, "salutation": string, "subject": string, "body": string}}"""
 
-    msg = _client().messages.create(
-        model=get_settings().anthropic_model,
-        max_tokens=1200,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
-    text = "".join(block.text for block in msg.content if getattr(block, "type", "") == "text")
-    data = _json_from(text)
+    client = _client()
+    model = get_settings().anthropic_model
+    messages = [{"role": "user", "content": user}]
+    msg = client.messages.create(model=model, max_tokens=MAX_TOKENS, system=system, messages=messages)
+    text = _text_of(msg)
+    try:
+        data = _json_from(text)
+    except NoJsonError:
+        # one corrective retry; keep what the model said so the error is diagnosable
+        first_stop, first_text = getattr(msg, "stop_reason", None), text
+        log.warning("write_mail lead %s: keine JSON-Antwort (stop_reason=%s): %s", lead.id, first_stop, _excerpt(first_text))
+        if text.strip():
+            messages.append({"role": "assistant", "content": text})
+        messages.append({
+            "role": "user",
+            "content": "Bitte antworte jetzt ausschliesslich mit dem JSON-Objekt im verlangten Format, ohne weiteren Text. "
+            "Fehlen Angaben zum Empfänger, schreibe trotzdem eine allgemeine Mail ohne erfundene Details.",
+        })
+        msg = client.messages.create(model=model, max_tokens=MAX_TOKENS, system=system, messages=messages)
+        text = _text_of(msg)
+        try:
+            data = _json_from(text)
+        except NoJsonError:
+            raise NoJsonError(
+                f"Keine JSON-Antwort vom Modell (stop_reason={getattr(msg, 'stop_reason', None)}): "
+                f"{_excerpt(text) or _excerpt(first_text) or '(leer)'}"
+            ) from None
     return Draft(
         subject=str(data.get("subject", "")).strip()[:200],
         body=str(data.get("body", "")).strip(),
@@ -121,12 +165,18 @@ def classify_reply(subject: str, body: str) -> str:
     )
     msg = _client().messages.create(
         model=get_settings().anthropic_model,
-        max_tokens=10,
+        max_tokens=20,
         system=system,
         messages=[{"role": "user", "content": f"Betreff: {subject}\n\n{body[:3000]}"}],
     )
-    text = "".join(block.text for block in msg.content if getattr(block, "type", "") == "text").strip().lower()
-    for c in REPLY_CLASSES:
-        if c in text:
+    return parse_reply_class(_text_of(msg))
+
+
+def parse_reply_class(text: str) -> str:
+    """Map the model's answer to a class. Whole-word match, longest name first:
+    a substring check took "not_interested" for "interested"."""
+    words = re.findall(r"[a-z_]+", (text or "").lower().replace("-", "_"))
+    for c in sorted(REPLY_CLASSES, key=len, reverse=True):
+        if c in words:
             return c
     return "other"

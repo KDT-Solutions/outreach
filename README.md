@@ -190,6 +190,20 @@ Signaturen pro Sprache pflegt man in der Oberfläche auf der Mandantenseite oder
 `<Abmeldetext> <Link>` angehängt, der Abmeldelink fehlt also nie. `preview_email` zeigt die
 aufgelöste Signatur und ihre Quelle (`signature.source`, z.B. `tenant:fr`).
 
+### Abmeldeseite und Abmeldegrund
+
+Der Abmeldelink `/u/<token>` öffnet eine Seite (Deutsch oder Französisch, je nach Sprache des
+Leads bzw. der Kampagne) mit einem Button "Abmelden" und einer freiwilligen Abfrage des Grunds.
+Ein blosses Öffnen des Links meldet nicht ab, weil Mail-Sicherheitsscanner jeden Link
+aufrufen und sonst Empfänger abmelden würden, die nie geklickt haben. Die One-Click-Abmeldung
+aus dem Mailprogramm (RFC 8058, POST auf `/u/<token>`) meldet weiterhin sofort ab; danach kann
+der Grund auf der Seite nachgereicht werden.
+
+Gründe: `kein_bedarf`, `bestehender_lieferant`, `falsche_person`, `konditionen`,
+`keine_werbung`, `anderes`, dazu eine freie Bemerkung. Sie stehen beim Lead
+(`unsubscribe_reason`, `unsubscribe_comment`, `unsubscribed_at`), in der Lead-Ansicht und
+zusammengezählt in `get_stats` unter `unsubscribe_reasons`.
+
 ### Freigabe über die API
 
 - `list_drafts` liefert die wartenden Entwürfe mit Lead, Schritt, Betreff und fertigem Text

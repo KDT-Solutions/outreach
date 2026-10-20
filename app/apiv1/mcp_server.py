@@ -30,7 +30,7 @@ Freigabe per API: list_drafts zeigt wartende Entwürfe, approve_drafts gibt sie 
 Freigabe (auto_approve):
 - auto_approve=false (Standard): Jeder Mailentwurf, auch jedes Follow-up, bekommt Lead-Status "needs_review" und wartet in der Weboberfläche unter /review. Erst nach Freigabe durch Kim (Weboberfläche oder approve_drafts) wird die Mail terminiert und im Sendefenster verschickt. Ohne Freigabe geht nichts raus, egal wie lange ein Entwurf liegt. Kampagne "active" heisst also nur: Leads werden gesucht, angereichert und Entwürfe geschrieben.
 - auto_approve=true: Entwürfe werden ohne Sichtung sofort als freigegeben gespeichert und im nächsten Sendefenster verschickt. Nur setzen, wenn Kim das ausdrücklich will.
-Lead-Status: new (gefunden) -> enriched (E-Mail gefunden) -> needs_review (Entwurf wartet) -> scheduled (freigegeben, wartet aufs Sendefenster) -> in_sequence (mindestens eine Mail gesendet, weitere Schritte offen) -> finished (alle Schritte gesendet). Abbrüche: replied (Antwort via Zammad erkannt, Sequenz gestoppt), bounced, unsubscribed, stopped, skipped, no_email.
+Lead-Status: new (gefunden) -> enriched (E-Mail gefunden) -> needs_review (Entwurf wartet) -> scheduled (freigegeben, wartet aufs Sendefenster) -> in_sequence (mindestens eine Mail gesendet, weitere Schritte offen) -> finished (alle Schritte gesendet). Abbrüche: replied (Antwort via Zammad erkannt, Sequenz gestoppt), bounced, unsubscribed, stopped, skipped, no_email, draft_failed (Entwurf 3x gescheitert, wartet auf Korrektur per update_lead; last_error zeigt die Modellantwort).
 Sendefenster pro Mandant: standardmässig Mo-Fr 9-17 Uhr, Tageslimit 40, Versand mit Zufallsverzögerung; Follow-ups werden einen Tag vor Fälligkeit als Entwurf vorbereitet.
 Ausgehende Mails werden nicht in Zammad erfasst; Antworten kommen über das Zammad-Postfach des Mandanten herein, stoppen die Sequenz und erhalten eine interne Notiz mit Lead-Link."""
 
@@ -159,6 +159,12 @@ def update_lead(
 def delete_lead(ctx: Context, lead_id: int, confirm: Confirm = False) -> dict:
     data = _model(schemas.Confirm, confirm=confirm)
     return _run(ctx, "delete_lead", lambda db, call: service.delete_lead(db, call, lead_id, data), write=True)
+
+
+@mcp.tool(description="Abmeldung eines Leads rückgängig machen (z.B. wenn ein Mailscanner den Abmeldelink geöffnet hat): Adresse von der Sperrliste nehmen und Lead in die Sequenz zurückholen.")
+def unsuppress_lead(ctx: Context, lead_id: int, confirm: Confirm = False) -> dict:
+    data = _model(schemas.Confirm, confirm=confirm)
+    return _run(ctx, "unsuppress_lead", lambda db, call: service.unsuppress_lead(db, call, lead_id, data), write=True)
 
 
 @mcp.tool(description="Sequenz der Kampagne setzen: Schritte mit subject, body_text (Klartext) und delay_days. Ersetzt die bisherige Sequenz.")

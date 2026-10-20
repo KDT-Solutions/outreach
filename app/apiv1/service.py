@@ -25,7 +25,7 @@ from .security import Principal
 log = logging.getLogger(__name__)
 
 # lead statuses that still lead to mails
-ACTIVE_LEAD_STATUSES = ("new", "enriched", "needs_review", "scheduled", "in_sequence")
+ACTIVE_LEAD_STATUSES = ("new", "enriched", "needs_review", "scheduled", "in_sequence", "draft_failed")
 CAMPAIGN_STATUSES = ("draft", "active", "paused", "done")
 # API field -> Lead attribute
 LEAD_FIELDS = {
@@ -224,6 +224,8 @@ def lead_dict(l: Lead) -> dict:
         email_mx_ok=l.email_mx_ok, next_send_at=_iso(l.next_send_at), last_sent_at=_iso(l.last_sent_at),
         last_error=l.last_error, created_at=_iso(l.created_at),
     )
+    if l.status == "unsubscribed" or l.unsubscribe_reason:
+        d.update(unsubscribe_reason=l.unsubscribe_reason, unsubscribe_comment=l.unsubscribe_comment, unsubscribed_at=_iso(l.unsubscribed_at), unsubscribe_source=l.unsubscribe_source)
     return d
 
 
@@ -270,6 +272,11 @@ def get_stats(db: Session, call: Call, campaign_id: int) -> dict:
     )
     auto = sum(n for cls, n in replies.items() if cls in ("out_of_office", "auto_reply"))
     drafts = db.scalar(select(func.count(Message.id)).where(Message.lead_id.in_(lead_ids), Message.direction == "out", Message.status == "draft")) or 0
+    unsub_reasons = dict(
+        db.execute(
+            select(Lead.unsubscribe_reason, func.count()).where(Lead.campaign_id == c.id, Lead.status == "unsubscribed").group_by(Lead.unsubscribe_reason)
+        ).all()
+    )
     t = c.tenant
     return {
         "campaign_id": c.id,
@@ -278,6 +285,7 @@ def get_stats(db: Session, call: Call, campaign_id: int) -> dict:
         "leads_contacted": contacted,
         "bounces": statuses.get("bounced", 0),
         "unsubscribed": statuses.get("unsubscribed", 0),
+        "unsubscribe_reasons": {k or "ohne_angabe": v for k, v in unsub_reasons.items()},
         "replies": sum(replies.values()) - auto,
         "auto_replies": auto,
         "replies_by_class": {k or "unknown": v for k, v in replies.items()},
@@ -498,6 +506,7 @@ def update_lead(db: Session, call: Call, lead_id: int, data: schemas.LeadUpdate)
     if "vorname" in changes or "nachname" in changes:
         lead.contact_name = " ".join(p for p in (lead.first_name, lead.last_name) if p) or None
     pipeline.discard_pending(lead, "Lead geändert (API)")
+    pipeline.reset_generate_failures(db, lead, "Lead geändert (API): " + ", ".join(changes))
     if preview["email_reverified"]:
         domain = lead.email.rsplit("@", 1)[1]
         lead.domain = None if _generic_domain(domain) else domain
@@ -520,6 +529,50 @@ def delete_lead(db: Session, call: Call, lead_id: int, data: schemas.Confirm) ->
     lead.next_send_at = None
     pipeline.log_event(db, "api_lead_deleted", lead.email or lead.company, lead.tenant_id, lead.id)
     return {"confirmed": True, "lead_id": lead.id, "deleted_at": _iso(lead.deleted_at)}
+
+
+def unsuppress_lead(db: Session, call: Call, lead_id: int, data: schemas.Confirm) -> dict:
+    """Lift a wrong unsubscribe (e.g. a mail scanner opened the link): remove the
+    address from the block list and put the lead back into its sequence."""
+    from ..services import scheduling
+
+    lead = _lead(db, call, lead_id)
+    if lead.status not in ("unsubscribed", "stopped"):
+        raise ApiError(409, "not_suppressed", f"Lead hat Status {lead.status}, nur abgemeldete oder gestoppte Leads können zurückgeholt werden")
+    if not lead.email:
+        raise ApiError(409, "no_email", "Lead hat keine E-Mail-Adresse")
+    steps = lead.campaign.steps or []
+    rows = db.query(Suppression).filter(Suppression.tenant_id == lead.tenant_id, Suppression.value == lead.email.lower()).all()
+    if lead.step >= len(steps):
+        new_status, next_at = "finished", None
+    elif lead.step == 0:
+        new_status, next_at = "enriched", None
+    else:
+        delay = int(steps[lead.step].get("delay_days", 3))
+        next_at = scheduling.schedule_after(lead.campaign.tenant, delay, lead.last_sent_at)
+        now = datetime.now(timezone.utc)
+        if next_at < now:
+            next_at = scheduling.schedule_after(lead.campaign.tenant, 0)
+        new_status = "in_sequence"
+    effect = {
+        "remove_from_block_list": [r.value for r in rows],
+        "new_status": new_status,
+        "next_send_at": _iso(next_at),
+        "note": "Folgemails brauchen weiterhin die Freigabe, sofern auto_approve=false",
+    }
+    if not data.confirm:
+        return _preview({"lead": lead_dict(lead), "effect": effect})
+    for r in rows:
+        db.delete(r)
+    old = f"{lead.status}, {lead.unsubscribe_source or '-'}, {_iso(lead.unsubscribed_at) or '-'}"
+    lead.status = new_status
+    lead.next_send_at = next_at
+    lead.unsubscribed_at = None
+    lead.unsubscribe_source = None
+    lead.unsubscribe_reason = None
+    lead.unsubscribe_comment = None
+    pipeline.log_event(db, "api_lead_unsuppressed", f"{lead.email} (vorher {old})", lead.tenant_id, lead.id)
+    return {"confirmed": True, "lead_id": lead.id, **effect}
 
 
 # ---------------------------------------------------------------- mail preview and test

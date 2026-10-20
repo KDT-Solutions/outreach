@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Outreach{% endblock %}</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/theme.js"></script>
 </head>
 <body>
 <nav>
@@ -16,6 +17,7 @@
   <a href="/tenants" class="{{ 'active' if request.url.path.startswith('/tenants') }}">Mandanten</a>
   <a href="/suppressions" class="{{ 'active' if request.url.path.startswith('/suppressions') }}">Sperrliste</a>
   <a href="/events" class="{{ 'active' if request.url.path.startswith('/events') }}">Protokoll</a>
+  <button type="button" id="theme-toggle" class="secondary small theme-toggle">Auto</button>
   <form method="post" action="/logout"><button class="secondary small">Abmelden</button></form>
 </nav>
 <main>

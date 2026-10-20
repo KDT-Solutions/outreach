@@ -147,6 +147,7 @@ LEAD_STATUSES = (
     "unsubscribed",
     "stopped",      # manually stopped
     "skipped",      # operator skipped
+    "draft_failed", # text generation failed repeatedly, waits for a manual fix
 )
 
 
@@ -192,6 +193,12 @@ class Lead(Base):
     unsubscribe_token: Mapped[str] = mapped_column(String(64), default=new_token, unique=True)
     notes: Mapped[str] = mapped_column(Text, default="")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Optional feedback from the unsubscribe page
+    unsubscribe_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    unsubscribe_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    unsubscribed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # page (button), one-click (mail client), webhook (SMTP2GO), link (old direct GET, before the page)
+    unsubscribe_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Soft delete (API): hidden from lists, never mailed again
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

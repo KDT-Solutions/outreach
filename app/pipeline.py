@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 
 from . import crypto
 from .config import get_settings
-from .models import Campaign, Event, Lead, Message, Suppression, Tenant
-from .services import crawler, hunter, llm, places, scheduling, signature, smtp2go, templating, verify, zammad
+from .models import Campaign, Event, Lead, Message, Suppression, Tenant, utcnow
+from .services import crawler, hunter, llm, mailtext, places, scheduling, signature, smtp2go, templating, verify, zammad
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +39,8 @@ def suppress(db: Session, tenant_id: int, value: str, reason: str) -> None:
         db.add(Suppression(tenant_id=tenant_id, value=value, reason=reason))
     # stop every active lead with that address
     for lead in db.query(Lead).filter(Lead.tenant_id == tenant_id, Lead.email == value).all():
+        if reason == "unsubscribe" and lead.unsubscribed_at is None:
+            lead.unsubscribed_at = utcnow()
         if lead.status in ("needs_review", "scheduled", "in_sequence", "enriched"):
             lead.status = "unsubscribed" if reason == "unsubscribe" else "bounced" if reason in ("bounce", "spam") else "stopped"
             lead.next_send_at = None
@@ -228,7 +230,7 @@ def generate_for_lead(db: Session, lead: Lead) -> Message | None:
         if better and better != lead.email and not is_suppressed(db, tenant.id, better) and verify.check(better):
             log_event(db, "email_switch", f"{lead.email} -> {better} (passt zu {lead.contact_name})", tenant.id, lead.id)
             lead.email = better
-    if draft.salutation:
+    if draft.salutation and not lead.salutation:
         lead.salutation = draft.salutation[:120]
     msg = Message(lead_id=lead.id, tenant_id=tenant.id, direction="out", step=lead.step, subject=draft.subject, body=draft.body)
     if campaign.auto_approve:
@@ -290,12 +292,42 @@ def generate_batch(db: Session, limit: int) -> int:
     for lead in leads + followups:
         try:
             generate_for_lead(db, lead)
+            lead.last_error = None
             n += 1
         except Exception as exc:
             log.exception("generate lead %s", lead.id)
-            lead.last_error = f"{type(exc).__name__}: {exc}"[:500]
+            err = f"{type(exc).__name__}: {exc}"
+            lead.last_error = err[:500]
+            log_event(db, "generate_failed", err, lead.tenant_id, lead.id)
+            db.flush()
+            failures = generate_failures(db, lead.id)
+            if failures >= MAX_GENERATE_FAILURES:
+                # stop retrying every worker cycle; the lead waits for a manual fix
+                lead.status = "draft_failed"
+                log_event(db, "generate_gave_up", f"Nach {failures} Fehlversuchen angehalten", lead.tenant_id, lead.id)
         db.commit()
     return n
+
+
+MAX_GENERATE_FAILURES = 3
+
+
+def generate_failures(db: Session, lead_id: int) -> int:
+    """Failed draft attempts since the lead was last changed (a change resets the count)."""
+    reset_at = db.scalar(
+        select(func.max(Event.created_at)).where(Event.lead_id == lead_id, Event.kind == "lead_reset")
+    )
+    q = select(func.count(Event.id)).where(Event.lead_id == lead_id, Event.kind == "generate_failed")
+    if reset_at is not None:
+        q = q.where(Event.created_at > reset_at)
+    return db.scalar(q) or 0
+
+
+def reset_generate_failures(db: Session, lead: Lead, reason: str) -> None:
+    """Start counting failed attempts from zero and let a parked lead be drafted again."""
+    log_event(db, "lead_reset", reason, lead.tenant_id, lead.id)
+    if lead.status == "draft_failed":
+        lead.status = "enriched"
 
 
 # ---------------------------------------------------------------- sending
@@ -435,14 +467,11 @@ def poll_replies(db: Session) -> int:
             if lead is None:
                 continue
             art = zammad.first_article(tenant.zammad_url, token, tid) or {}
-            body = art.get("body") or ""
-            if (art.get("content_type") or "").startswith("text/html"):
-                from bs4 import BeautifulSoup
-
-                body = BeautifulSoup(body, "lxml").get_text(" ", strip=True)
+            body = mailtext.body_from_article(art)
             subject = t.get("title") or ""
             try:
-                cls = llm.classify_reply(subject, body)
+                # classify only the reply itself, not our own quoted mail below it
+                cls = llm.classify_reply(subject, mailtext.split_quote(body)[0])
             except Exception as exc:
                 log.warning("classify failed: %s", exc)
                 cls = "other"
@@ -519,7 +548,57 @@ def handle_webhook(db: Session, tenant: Tenant, payload: dict) -> str:
     reason = smtp2go.SUPPRESS_EVENTS.get(event or "")
     if reason and target:
         suppress(db, tenant.id, target, reason)
+        if reason == "unsubscribe" and lead is not None and lead.unsubscribe_source is None:
+            lead.unsubscribe_source = "webhook"
         log_event(db, f"webhook_{event}", f"{target} ({email_id or message_id or '-'})", tenant.id, lead.id if lead else None)
         return f"suppressed {target} ({reason})"
     log_event(db, f"webhook_{event or 'unknown'}", f"{target or '-'} ({email_id or message_id or '-'})", tenant.id, lead.id if lead else None)
     return "ok"
+
+
+# ---------------------------------------------------------------- one-off repair
+REPLY_REPAIR_MARK = "replies_v1"
+
+
+def repair_replies_once(db: Session) -> int:
+    """Replies stored before the fix lost their line breaks, and every rejection was
+    stored as "interested" (substring match). Re-read each body from Zammad, classify
+    again and leave an internal note on the ticket when the class changes.
+    Runs once per database, marked by a "migration" event."""
+    if db.scalar(select(Event.id).where(Event.kind == "migration", Event.detail == REPLY_REPAIR_MARK)):
+        return 0
+    fixed = 0
+    msgs = db.query(Message).filter(Message.direction == "in", Message.zammad_ticket_id.isnot(None)).all()
+    for m in msgs:
+        tenant = db.get(Tenant, m.tenant_id)
+        token = crypto.decrypt(tenant.zammad_token_enc) if tenant and tenant.zammad_url else None
+        if not token:
+            continue
+        try:
+            art = zammad.first_article(tenant.zammad_url, token, m.zammad_ticket_id)
+            if art:
+                m.body = mailtext.body_from_article(art)[:8000]
+            old = m.classification
+            new = llm.classify_reply(m.subject or "", mailtext.split_quote(m.body or "")[0])
+        except Exception as exc:
+            log.warning("repair reply %s: %s", m.id, exc)
+            db.rollback()
+            continue
+        if new != old:
+            m.classification = new
+            fixed += 1
+            log_event(db, "reply_reclassified", f"{old} -> {new}", m.tenant_id, m.lead_id)
+            if new in ("unsubscribe", "bounce") and m.lead and (m.lead.email or m.from_email):
+                suppress(db, m.tenant_id, m.lead.email or m.from_email, new)
+            try:
+                zammad.add_note(
+                    tenant.zammad_url, token, m.zammad_ticket_id,
+                    f"Outreach: Einstufung korrigiert von {old} auf {new} "
+                    f"(Fehler in der automatischen Einstufung, inzwischen behoben).",
+                )
+            except Exception as exc:
+                log.warning("Zammad note failed: %s", exc)
+        db.commit()
+    log_event(db, "migration", REPLY_REPAIR_MARK)
+    db.commit()
+    return fixed
