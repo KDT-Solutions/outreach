@@ -4,6 +4,7 @@ is called by the worker loop (and by UI actions)."""
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -129,6 +130,28 @@ def run_sourcing(db: Session, campaign: Campaign) -> str:
 
 
 # ---------------------------------------------------------------- enrichment
+@dataclass
+class EmailFinding:
+    email: str | None
+    source: str | None  # crawler | hunter
+    crawl: crawler.CrawlResult
+    contact_name: str | None = None
+
+
+def find_email(website: str, place_hint: str | None = None, **crawl_opts) -> EmailFinding:
+    """Crawl the website for an address, Hunter.io as fallback. No DB access, so it can run
+    in worker threads (API search/enrich). crawl_opts go to crawler.crawl."""
+    res = crawler.crawl(website, place_hint=place_hint, **crawl_opts)
+    if res.best_email:
+        return EmailFinding(res.best_email, "crawler", res)
+    if res.domain:
+        best = hunter.pick_best(hunter.domain_search(res.domain))
+        if best and best.get("value"):
+            name = f"{best['first_name']} {best['last_name']}" if best.get("first_name") and best.get("last_name") else None
+            return EmailFinding(best["value"].lower(), "hunter", res, name)
+    return EmailFinding(None, None, res)
+
+
 def enrich_lead(db: Session, lead: Lead) -> None:
     """Find an e-mail address and website excerpts for one lead."""
     if is_suppressed(db, lead.tenant_id, lead.email):
@@ -149,21 +172,16 @@ def enrich_lead(db: Session, lead: Lead) -> None:
         lead.notes = "Keine Webseite bei Google hinterlegt"
         return
 
-    res = crawler.crawl(lead.website, place_hint=lead.address)
+    found = find_email(lead.website, place_hint=lead.address)
+    res = found.crawl
     lead.domain = res.domain or lead.domain
     lead.site_excerpt = res.site_excerpt or None
     lead.impressum_excerpt = res.impressum_excerpt or None
-    email = res.best_email
-    source = "crawler" if email else None
+    lead.team_excerpt = res.team_excerpt or None
+    email, source = found.email, found.source
     lead.email_candidates = ",".join(res.emails[:10]) or None
-
-    if not email and lead.domain:
-        best = hunter.pick_best(hunter.domain_search(lead.domain))
-        if best and best.get("value"):
-            email = best["value"].lower()
-            source = "hunter"
-            if best.get("first_name") and best.get("last_name"):
-                lead.contact_name = f"{best['first_name']} {best['last_name']}"
+    if found.contact_name:
+        lead.contact_name = found.contact_name
 
     if not email:
         lead.status = "no_email"

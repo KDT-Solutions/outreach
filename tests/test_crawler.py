@@ -4,7 +4,7 @@ from app.services import crawler
 
 
 def _emails(html: str) -> set[str]:
-    return crawler._extract_emails(html, BeautifulSoup(html, "lxml"))
+    return set(crawler._extract_emails(html, BeautifulSoup(html, "lxml")))
 
 
 def test_url_encoded_mailto_is_decoded():
@@ -36,7 +36,28 @@ def test_contact_match_needs_first_name_or_initial():
     assert crawler.pick_for_contact(["info@g.ch"], "Bettina Schmid") is None
 
 
-def test_management_pages_come_right_after_impressum():
-    html = "".join(f'<a href="/{p}">{p}</a>' for p in ("honda/kontakt-neuwagen", "toyota/kontakt-neuwagen", "firma/kontakt", "firma/geschaeftsleitung", "impressum"))
-    links = crawler._contact_links(BeautifulSoup(html, "lxml"), "https://www.garage.ch/")
-    assert links[:2] == ["https://www.garage.ch/impressum", "https://www.garage.ch/firma/geschaeftsleitung"]
+def test_people_pages_first_then_contact_then_impressum():
+    paths = ("honda/kontakt-neuwagen", "firma/kontakt", "impressum", "firma/mitarbeiter/werkstatt", "firma/geschaeftsleitung",
+             "firma/mitarbeiter/verkauf", "ueber-uns")
+    html = "".join(f'<a href="/{p}">{p}</a>' for p in paths)
+    links = crawler._contact_links(BeautifulSoup(html, "lxml"), "https://www.garage.example/")
+    base = "https://www.garage.example/"
+    assert links[:4] == [base + "firma/geschaeftsleitung", base + "ueber-uns", base + "firma/kontakt", base + "impressum"]
+    assert set(links[4:]) == {base + "honda/kontakt-neuwagen", base + "firma/mitarbeiter/werkstatt", base + "firma/mitarbeiter/verkauf"}
+    # only two subpages (API mode): one people page plus the contact page
+    assert crawler._contact_links(BeautifulSoup(html, "lxml"), base, budget=2)[:2] == [base + "firma/geschaeftsleitung", base + "firma/kontakt"]
+
+
+def test_team_excerpt_comes_from_people_and_contact_pages():
+    from unittest import mock
+
+    pages = {
+        "https://m.example/": '<a href="/impressum">Impressum</a><a href="/team">Team</a><a href="/kontakt">Kontakt</a>',
+        "https://m.example/team": "<p>Anna Muster, Geschäftsführerin</p>",
+        "https://m.example/kontakt": "<p>Werkstatt: Beat Beispiel</p>",
+        "https://m.example/impressum": "<p>Verwaltungsrat: Carl Rat</p>",
+    }
+    with mock.patch.object(crawler, "_fetch", side_effect=lambda c, url, m: (pages.get(url), url)):
+        res = crawler.crawl("https://m.example/")
+    assert "Anna Muster, Geschäftsführerin" in res.team_excerpt and "Beat Beispiel" in res.team_excerpt
+    assert "Carl Rat" not in res.team_excerpt and "Carl Rat" in res.impressum_excerpt

@@ -185,6 +185,8 @@ class Lead(Base):
     # Text the LLM sees: homepage + impressum/kontakt excerpt
     site_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
     impressum_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # team / about / contact pages: the contact person is chosen from here
+    team_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     status: Mapped[str] = mapped_column(String(20), default="new", index=True)
     step: Mapped[int] = mapped_column(Integer, default=0)  # next step to send (0-based)

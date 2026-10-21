@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     crawl_max_bytes: int = 1_500_000
     crawl_user_agent: str = "Mozilla/5.0 (compatible; OutreachBot/0.1; +https://example.com)"
 
+    # API search_leads / enrich_leads: per page timeout, pages per domain (incl. start
+    # page), parallel lookups and a time budget for the whole call
+    api_crawl_timeout: float = 10.0
+    api_crawl_max_pages: int = 3
+    api_prospect_workers: int = 8
+    api_prospect_deadline_seconds: int = 240
+
     # batch sizes per worker tick
     enrich_batch: int = 15
     generate_batch: int = 10

@@ -52,6 +52,7 @@ def _ensure_columns() -> None:
         "messages": {"zammad_ticket_id": "INTEGER"},
         "leads": {
             "email_candidates": "TEXT",
+            "team_excerpt": "TEXT",
             "first_name": "VARCHAR(80)",
             "last_name": "VARCHAR(80)",
             "city": "VARCHAR(120)",

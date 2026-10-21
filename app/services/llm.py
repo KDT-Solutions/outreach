@@ -105,12 +105,15 @@ Vorgegebene Anrede: {lead.salutation or 'keine'}
 Auszug Startseite:
 {(lead.site_excerpt or '')[:2500]}
 
-Auszug Impressum/Kontakt:
-{(lead.impressum_excerpt or '')[:2000]}
+Auszug Team / Über uns / Kontakt:
+{(lead.team_excerpt or '-')[:5000]}
+
+Auszug Impressum:
+{(lead.impressum_excerpt or '-')[:1500]}
 {prev_txt}
 
 Aufgabe:
-1. Finde im Impressum/Kontakt-Auszug, falls vorhanden, den Namen der Inhaberin/des Inhabers bzw. der Geschäftsführung (Vor- und Nachname). Wenn unklar: null.
+1. Bestimme die beste Ansprechperson für dieses Angebot (Vor- und Nachname), vor allem aus dem Auszug Team / Über uns / Kontakt: bevorzugt die Person, die den Betrieb führt (Inhaber/in, Geschäftsführer/in), sonst die Person, die für das Thema des Angebots zuständig ist (z.B. Betriebs-, Werkstatt- oder Filialleitung). Das Impressum nur verwenden, wenn dort jemand aus der operativen Führung steht; reine Verwaltungsräte oder Vertretungsberechtigte ohne operative Rolle zählen nicht. Wenn unklar: null.
 2. Ist eine Anrede vorgegeben, übernimm sie unverändert. Sonst bilde sie aus dem bekannten Ansprechpartner bzw. dem gefundenen Namen (z.B. "Guten Tag Herr Müller" oder "Guten Tag Frau Keller"); passt der Name nicht sicher zur Empfängeradresse, kein Name oder Geschlecht unklar: "Guten Tag".
 3. Schreibe Betreff und Mailtext. Der Text beginnt mit der Anrede.
 

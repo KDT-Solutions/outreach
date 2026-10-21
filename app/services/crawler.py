@@ -18,12 +18,18 @@ from ..config import get_settings
 
 log = logging.getLogger(__name__)
 
-CONTACT_HINTS = (
-    "impressum", "kontakt", "contact", "imprint", "ueber-uns", "über-uns", "about", "team", "mentions-legales", "legal",
-    "geschaeftsleitung", "geschäftsleitung", "geschaftsleitung", "inhaber", "management", "direction",
+# Pages that show the people (owner, management, team), most telling first. They name the
+# best contact person; the Impressum often only lists board members or legal representatives.
+PEOPLE_HINTS = (
+    "geschaeftsleitung", "geschäftsleitung", "geschaftsleitung", "inhaber", "management", "direction", "team", "equipe",
+    "équipe", "ueber-uns", "über-uns", "uber-uns", "about", "a-propos", "qui-sommes", "portrait", "unternehmen", "mitarbeit",
 )
-# Pages that name the owner or management: fetched right after the Impressum
-MANAGEMENT_HINTS = ("geschaeftsleitung", "geschäftsleitung", "geschaftsleitung", "inhaber", "management", "direction", "team", "ueber-uns", "über-uns")
+CONTACT_HINTS = ("impressum", "kontakt", "contact", "imprint", "mentions-legales", "legal") + PEOPLE_HINTS
+# people pages fetched before the contact page; more only if pages are left over
+PEOPLE_PAGES_FIRST = 2
+# a long staff list must not push the contact page out of the excerpt
+TEAM_EXCERPT_PER_PAGE = 2000
+TEAM_EXCERPT_MAX = 6000
 # no "%": URL-encoded mailto links ("%20info@...") must not leak into the address
 EMAIL_RE = re.compile(r"[A-Z0-9._+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.I)
 STRICT_EMAIL_RE = re.compile(r"^[a-z0-9][a-z0-9._+\-]*@[a-z0-9][a-z0-9.\-]*\.[a-z]{2,}$")
@@ -43,6 +49,8 @@ class CrawlResult:
     best_email: str | None = None
     site_excerpt: str = ""
     impressum_excerpt: str = ""
+    # text of the team / about / contact pages: where the contact person is chosen from
+    team_excerpt: str = ""
     pages_fetched: int = 0
     error: str | None = None
 
@@ -67,27 +75,28 @@ def _text_of(soup: BeautifulSoup, limit: int) -> str:
     return text[:limit]
 
 
-def _extract_emails(html: str, soup: BeautifulSoup) -> set[str]:
-    found: set[str] = set()
+def _extract_emails(html: str, soup: BeautifulSoup) -> dict[str, None]:
+    """Addresses in the order they appear (mailto links first); dict = ordered set."""
+    found: dict[str, None] = {}
     for a in soup.select('a[href^="mailto:"]'):
         href = a.get("href", "")
         # mailto links are URL-encoded: "mailto:%20info@firma.ch" has a leading space
         addr = unquote(href[7:].split("?")[0]).strip()
         if addr:
-            found.add(addr.lower())
+            found[addr.lower()] = None
     # decode first: raw "%20info@firma.ch" in an href would otherwise yield "20info@firma.ch"
     for m in EMAIL_RE.findall(unquote(html)):
-        found.add(m.lower())
+        found[m.lower()] = None
     for m in OBFUSCATED_RE.findall(html):
-        found.add(f"{m[0]}@{m[1]}.{m[2]}".lower())
-    clean = set()
+        found[f"{m[0]}@{m[1]}.{m[2]}".lower()] = None
+    clean: dict[str, None] = {}
     for e in found:
         if e.endswith(SKIP_EMAIL_SUFFIX) or any(p in e for p in SKIP_EMAIL_PARTS):
             continue
         e = e.strip(" .,;:")
         if len(e) > 100 or e.count("@") != 1 or not STRICT_EMAIL_RE.match(e):
             continue
-        clean.add(e)
+        clean[e] = None
     return clean
 
 
@@ -116,17 +125,37 @@ def _location_match(email: str, place_hint: str | None) -> bool:
     return parts[1] in words
 
 
-def rank_emails(emails: set[str], domain: str | None, place_hint: str | None = None) -> list[str]:
+# order of generic mailboxes when generic addresses are preferred (API search/enrich)
+GENERIC_PREFERENCE = ("info", "kontakt", "contact", "office", "mail")
+
+
+def rank_emails(
+    emails, domain: str | None, place_hint: str | None = None, *, prefer_generic: bool = False, own_domain_only: bool = False
+) -> list[str]:
     """Own-domain first. A single personal address on the company domain beats info@;
     with several personal addresses we cannot tell who is who, so info@ comes first.
     Among generic addresses: one for the lead's location (info.reinach@) first, then
-    plain info@, then other generic ones."""
+    plain info@, then other generic ones.
+
+    prefer_generic: generic mailboxes always first (info@, kontakt@, office@, mail@, then
+    other generic ones), personal addresses after them in the order found on the site.
+    own_domain_only: drop addresses on other domains (agency, web designer, gmail)."""
     def same(e: str) -> bool:
         dom = e.partition("@")[2]
         return bool(domain and (dom == domain or dom.endswith("." + domain)))
 
+    emails = list(emails)
     own = [e for e in emails if same(e)]
-    other = [e for e in emails if not same(e)]
+    other = [] if own_domain_only else [e for e in emails if not same(e)]
+    if prefer_generic:
+        def generic_rank(e: str) -> tuple:
+            head = (_generic_parts(e) or ("", ""))[0]
+            pref = GENERIC_PREFERENCE.index(head) if head in GENERIC_PREFERENCE else len(GENERIC_PREFERENCE)
+            return (not _location_match(e, place_hint), pref, (_generic_parts(e) or ("", ""))[1] != "")
+
+        generic = sorted((e for e in own if is_generic(e)), key=generic_rank)  # stable: keeps site order
+        return generic + [e for e in own if not is_generic(e)] + other
+
     own_personal = sorted(e for e in own if not is_generic(e))
     own_generic = sorted(
         (e for e in own if is_generic(e)),
@@ -183,9 +212,20 @@ def pick_for_contact(candidates: list[str], contact_name: str | None) -> str | N
     return None
 
 
-def crawl(website: str, place_hint: str | None = None) -> CrawlResult:
-    """place_hint: the lead's postal address, to prefer info.<ort>@ for multi-site companies."""
+def crawl(
+    website: str,
+    place_hint: str | None = None,
+    *,
+    prefer_generic: bool = False,
+    own_domain_only: bool = False,
+    max_pages: int | None = None,
+    timeout: float | None = None,
+) -> CrawlResult:
+    """place_hint: the lead's postal address, to prefer info.<ort>@ for multi-site companies.
+    max_pages counts the start page (default 5), timeout is per page (default CRAWL_TIMEOUT).
+    prefer_generic / own_domain_only: see rank_emails."""
     s = get_settings()
+    subpages = (max_pages - 1) if max_pages else 4
     res = CrawlResult(domain=domain_of(website))
     if not website:
         res.error = "keine Webseite"
@@ -194,9 +234,9 @@ def crawl(website: str, place_hint: str | None = None) -> CrawlResult:
         website = "https://" + website
 
     headers = {"User-Agent": s.crawl_user_agent, "Accept-Language": "de-CH,de;q=0.9,en;q=0.5"}
-    emails: set[str] = set()
+    emails: dict[str, None] = {}
     try:
-        with httpx.Client(timeout=s.crawl_timeout, follow_redirects=True, headers=headers) as client:
+        with httpx.Client(timeout=timeout or s.crawl_timeout, follow_redirects=True, headers=headers) as client:
             html, base = _fetch(client, website, s.crawl_max_bytes)
             res.pages_fetched += 1
             if html is None:
@@ -205,22 +245,26 @@ def crawl(website: str, place_hint: str | None = None) -> CrawlResult:
             res.domain = domain_of(base) or res.domain
             soup = BeautifulSoup(html, "lxml")
             emails |= _extract_emails(html, soup)
-            links = _contact_links(soup, base)
+            links = _contact_links(soup, base, budget=max(0, subpages))
             res.site_excerpt = _text_of(BeautifulSoup(html, "lxml"), 3000)
 
-            for url in links[:4]:
+            for url in links[:max(0, subpages)]:
                 sub, _ = _fetch(client, url, s.crawl_max_bytes)
                 if sub is None:
                     continue
                 res.pages_fetched += 1
                 sub_soup = BeautifulSoup(sub, "lxml")
                 emails |= _extract_emails(sub, sub_soup)
-                if any(h in url.lower() for h in ("impressum", "imprint", "kontakt", "contact", "mentions")) and not res.impressum_excerpt:
+                kind = _page_kind(url)
+                if kind in ("people", "contact") and len(res.team_excerpt) < TEAM_EXCERPT_MAX:
+                    page_text = _text_of(sub_soup, TEAM_EXCERPT_PER_PAGE)
+                    res.team_excerpt = (res.team_excerpt + "\n---\n" + page_text if res.team_excerpt else page_text)[:TEAM_EXCERPT_MAX]
+                elif kind == "impressum" and not res.impressum_excerpt:
                     res.impressum_excerpt = _text_of(sub_soup, 2500)
     except Exception as exc:  # network errors, TLS, etc.
         res.error = f"{type(exc).__name__}: {exc}"[:300]
 
-    res.emails = rank_emails(emails, res.domain, place_hint)
+    res.emails = rank_emails(emails, res.domain, place_hint, prefer_generic=prefer_generic, own_domain_only=own_domain_only)
     res.best_email = res.emails[0] if res.emails else None
     return res
 
@@ -250,7 +294,22 @@ def _fetch(client: httpx.Client, url: str, max_bytes: int) -> tuple[str | None, 
         return None, url
 
 
-def _contact_links(soup: BeautifulSoup, base: str) -> list[str]:
+def _page_kind(url: str) -> str:
+    path = urlparse(url).path.lower()
+    if any(h in path for h in PEOPLE_HINTS):
+        return "people"
+    if "kontakt" in path or "contact" in path:
+        return "contact"
+    if "impressum" in path or "imprint" in path or "mentions" in path or "legal" in path:
+        return "impressum"
+    return "other"
+
+
+def _contact_links(soup: BeautifulSoup, base: str, budget: int = 4) -> list[str]:
+    """Same-host links that look like team/about/contact/Impressum pages, most useful first:
+    people pages (management before team before about; two, or one if budget pages leave
+    no room for more), one contact page, the Impressum, then the rest. A site with many
+    staff or "kontakt-…" pages must not crowd out the others."""
     base_host = urlparse(base).hostname or ""
     seen: list[str] = []
     for a in soup.find_all("a", href=True):
@@ -267,15 +326,15 @@ def _contact_links(soup: BeautifulSoup, base: str) -> list[str]:
         full = full.split("#")[0]
         if full not in seen:
             seen.append(full)
-    # Impressum first (it names the owner), then management/team pages (their mailboxes),
-    # then contact pages; a site with many "kontakt-…" pages must not crowd them out.
-    def prio(u: str) -> int:
+    def people_rank(u: str) -> int:
         path = urlparse(u).path.lower()
-        if "impressum" in path or "imprint" in path or "mentions" in path:
-            return 0
-        if any(h in path for h in MANAGEMENT_HINTS):
-            return 1
-        return 2
+        return next(i for i, h in enumerate(PEOPLE_HINTS) if h in path)
 
-    seen.sort(key=prio)
-    return seen
+    people = sorted((u for u in seen if _page_kind(u) == "people"), key=people_rank)  # stable
+    # the general contact page ("/kontakt") before brand or department ones ("/marke/kontakt-neuwagen")
+    contact = sorted((u for u in seen if _page_kind(u) == "contact"), key=lambda u: len(urlparse(u).path))
+    impressum = [u for u in seen if _page_kind(u) == "impressum"]
+    other = [u for u in seen if _page_kind(u) == "other"]
+    n_people = min(PEOPLE_PAGES_FIRST, max(1, budget - 1)) if contact else PEOPLE_PAGES_FIRST
+    first = people[:n_people] + contact[:1] + impressum[:1]
+    return first + [u for u in people + contact + impressum + other if u not in first]
