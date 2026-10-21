@@ -78,6 +78,9 @@ setups with one API key per tenant.
 4. Approved mails go out inside the send window, respecting the daily cap.
    Follow-ups are drafted a day before they are due.
 5. Replies arrive in Zammad; the worker polls new tickets every two minutes, stops the sequence, classifies the reply and notes the lead context on the ticket.
+6. A campaign or single leads can be set to **wartend** (status `waiting`) with a reason, e.g.
+   when they should only go out after another campaign got its answers. Nothing is sourced,
+   drafted or sent for them, and their drafts disappear from **Freigabe** until released.
 
 ## JSON API
 
@@ -151,11 +154,13 @@ Fehler sind immer JSON:
 | `preview_email` | `GET /api/v1/campaigns/{id}/preview?lead_id=&step=` |
 | `send_test` | `POST /api/v1/campaigns/{id}/send-test` |
 | `start_campaign` / `pause_campaign` / `stop_campaign` | `POST /api/v1/campaigns/{id}/start` / `pause` / `stop` |
+| `wait_campaign` | `POST /api/v1/campaigns/{id}/wait` (Status wartend mit Grund, zurück mit `start_campaign`) |
+| `wait_leads` / `release_leads` | `POST /api/v1/campaigns/{id}/leads/wait` / `release` |
 | `get_stats` | `GET /api/v1/campaigns/{id}/stats` |
 | `get_delivery_status` | `GET /api/v1/campaigns/{id}/delivery` (Zustellstatus pro Mail laut SMTP2GO) |
 | `list_audit_log` | `GET /api/v1/audit?tenant=&campaign_id=&tool=&since=` |
 | `update_campaign` | `PATCH /api/v1/campaigns/{id}` |
-| `list_drafts` | `GET /api/v1/campaigns/{id}/drafts?status=draft` |
+| `list_drafts` | `GET /api/v1/campaigns/{id}/drafts?status=draft&include_waiting=false` |
 | `approve_drafts` | `POST /api/v1/campaigns/{id}/drafts/approve` |
 | `reject_draft` | `POST /api/v1/drafts/{draft_id}/reject` |
 | `list_tenant_signatures` | `GET /api/v1/tenants/{slug}/signatures` |
@@ -265,6 +270,30 @@ zusammengezählt in `get_stats` unter `unsubscribe_reasons`.
 - `reject_draft` verwirft einen Entwurf; der Lead wird auf `skipped` gesetzt.
 - `update_campaign` ändert Name, Absender, Reply-To und `auto_approve`. Wird `auto_approve` auf
   `true` gesetzt, werden alle wartenden Entwürfe sofort mit freigegeben; die Vorschau listet sie auf.
+
+### Wartend (Kampagnen und Leads)
+
+Für Kampagnen oder Leads, die erst raus sollen, wenn eine Bedingung erfüllt ist (Antworten einer
+anderen Kampagne, fehlende Unterlagen usw.). Der Grund ist Pflicht und steht in Liste, Detailansicht
+und API (`wait_reason`).
+
+- `wait_campaign` setzt eine Kampagne auf `waiting`: kein Sourcing, keine Entwürfe, kein Versand,
+  auch keine Follow-ups. Die vorhandenen Entwürfe bleiben erhalten, verschwinden aber aus der
+  Freigabe; `approve_drafts` antwortet mit `409 campaign_waiting`. Zurück mit `start_campaign`
+  (mit `confirm_send`); bei `auto_approve` werden die liegenden Entwürfe dann freigegeben.
+  `pause_campaign` und `stop_campaign` löschen den Grund.
+- `wait_leads` parkt einzelne Leads (`lead_ids`) oder alle einer Kampagne (`all: true`). Der
+  bisherige Status wird gemerkt (`status_after_release`). Abgeschlossene Leads (`finished`,
+  `replied`, `bounced`, `unsubscribed`, `stopped`, `skipped`, `no_email`) bleiben unverändert und
+  stehen unter `not_parkable`. Entwürfe wartender Leads fehlen in `list_drafts` (gezählt unter
+  `parked_waiting`, sichtbar mit `include_waiting=true`) und werden von `approve_drafts`
+  übersprungen (`leads_waiting`).
+- `release_leads` setzt sie in den gemerkten Status zurück. Entwürfe brauchen weiterhin die
+  Freigabe; bereits freigegebene Mails, deren Zeitpunkt vorbei ist, gehen im nächsten Sendefenster raus.
+- Antwort, Abmeldung oder Bounce beenden auch einen wartenden Lead wie sonst.
+- In der Weboberfläche: Kampagne über «Auf wartend setzen» mit Grund, zurück über «Aktivieren»;
+  Lead über «Auf wartend setzen» bzw. «Nicht mehr wartend». Die Freigabe zeigt die Zahl der
+  ausgeblendeten Entwürfe.
 
 ### Beispiele mit curl
 

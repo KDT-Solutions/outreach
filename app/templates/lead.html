@@ -16,6 +16,8 @@
 <tr><th>Nächster Versand</th><td>{{ dt(lead.next_send_at) }}</td></tr>
 <tr><th>Letzter Versand</th><td>{{ dt(lead.last_sent_at) }}</td></tr>
 <tr><th>Notiz</th><td>{{ lead.notes or '–' }}</td></tr>
+{% if lead.status == 'waiting' %}<tr><th>Wartet auf</th><td>{{ lead.wait_reason or '–' }} <span class="muted small">(danach {{ lead.wait_prev_status or '–' }})</span></td></tr>{% endif %}
+{% if lead.campaign.status == 'waiting' %}<tr><th>Kampagne</th><td>wartend: {{ lead.campaign.wait_reason or '–' }}</td></tr>{% endif %}
 {% if lead.status == 'unsubscribed' or lead.unsubscribe_reason %}<tr><th>Abmeldegrund</th><td>{{ lead.unsubscribe_reason or 'keine Angabe' }}{% if lead.unsubscribe_comment %}<br><span class="small">{{ lead.unsubscribe_comment }}</span>{% endif %}{% if lead.unsubscribed_at %} <span class="muted small">({{ dt(lead.unsubscribed_at) }}{% if lead.unsubscribe_source %}, {{ lead.unsubscribe_source }}{% endif %})</span>{% endif %}</td></tr>{% endif %}
 {% if lead.last_error %}<tr><th>Fehler</th><td class="error small">{{ lead.last_error }}</td></tr>{% endif %}
 </table>
@@ -23,11 +25,16 @@
 <div class="card">
 <h2 style="margin-top:0">Aktionen</h2>
 <form method="post" action="/leads/{{ lead.id }}/action" class="actions"><input type="hidden" name="csrf" value="{{ csrf }}">
-<button name="action" value="generate" class="secondary small" {% if not lead.email %}disabled{% endif %}>Text generieren</button>
+<button name="action" value="generate" class="secondary small" {% if not lead.email or lead.status == 'waiting' %}disabled{% endif %}>Text generieren</button>
 <button name="action" value="requeue" class="secondary small">Neu anreichern</button>
 <button name="action" value="skip" class="secondary small">Überspringen</button>
 <button name="action" value="stop" class="danger small">Stoppen</button>
 <button name="action" value="suppress" class="danger small" {% if not lead.email %}disabled{% endif %}>Auf Sperrliste</button>
+</form>
+<form method="post" action="/leads/{{ lead.id }}/action"><input type="hidden" name="csrf" value="{{ csrf }}">
+{% if lead.status == 'waiting' %}<div class="actions"><button name="action" value="release" class="small">Nicht mehr wartend</button></div>
+{% elif lead.status in ('new','enriched','needs_review','scheduled','in_sequence','draft_failed') %}<label>Wartend, Grund</label><input type="text" name="wait_reason" maxlength="500" placeholder="z.B. wartet auf Unterlagen">
+<div class="actions"><button name="action" value="wait" class="secondary small">Auf wartend setzen</button></div>{% endif %}
 </form>
 <form method="post" action="/leads/{{ lead.id }}/action"><input type="hidden" name="csrf" value="{{ csrf }}">
 <label>E-Mail manuell setzen</label><input type="email" name="email" value="{{ lead.email or '' }}">
@@ -46,7 +53,10 @@
 <p class="small muted">{{ 'Eingang' if m.direction=='in' else 'Schritt ' ~ (m.step+1) }} · <span class="badge {{ 'ok' if m.status in ('sent','received') else 'warn' if m.status=='draft' else 'info' if m.status=='approved' else 'bad' }}">{{ m.status }}</span>
 {% if m.classification %}<span class="badge {{ {'interested':'ok','question':'warn','not_interested':'bad','unsubscribe':'bad','bounce':'bad'}.get(m.classification, 'info') }}">{{ m.classification }}</span>{% endif %}
 {% if m.sent_at %}· gesendet {{ dt(m.sent_at) }}{% endif %}{% if m.from_email %}· von {{ m.from_email }}{% endif %}{% if m.error %} · <span class="error">{{ m.error }}</span>{% endif %}</p>
-{% if m.status == 'draft' %}
+{% if m.status == 'draft' and (lead.status == 'waiting' or lead.campaign.status == 'waiting') %}
+<p class="small muted">Wartend, Freigabe gesperrt.</p>
+<p><b>{{ m.subject }}</b></p><pre class="mail">{{ m.body }}</pre>
+{% elif m.status == 'draft' %}
 <form method="post" action="/messages/{{ m.id }}/decide"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/leads/{{ lead.id }}">
 <label>Betreff</label><input type="text" name="subject" value="{{ m.subject }}">
 <label>Text</label><textarea name="body" rows="10">{{ m.body }}</textarea>

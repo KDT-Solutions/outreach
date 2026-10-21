@@ -103,6 +103,21 @@ def stop_campaign(request: Request, campaign_id: int, body: schemas.Confirm):
     return _run(request, "stop_campaign", partial(service.stop_campaign, campaign_id=campaign_id, data=body), write=True)
 
 
+@router.post("/campaigns/{campaign_id}/wait", summary="wait_campaign")
+def wait_campaign(request: Request, campaign_id: int, body: schemas.WaitCampaign):
+    return _run(request, "wait_campaign", partial(service.wait_campaign, campaign_id=campaign_id, data=body), write=True)
+
+
+@router.post("/campaigns/{campaign_id}/leads/wait", summary="wait_leads")
+def wait_leads(request: Request, campaign_id: int, body: schemas.WaitLeads):
+    return _run(request, "wait_leads", partial(service.wait_leads, campaign_id=campaign_id, data=body), write=True)
+
+
+@router.post("/campaigns/{campaign_id}/leads/release", summary="release_leads")
+def release_leads(request: Request, campaign_id: int, body: schemas.ReleaseLeads):
+    return _run(request, "release_leads", partial(service.release_leads, campaign_id=campaign_id, data=body), write=True)
+
+
 # ---------------------------------------------------------------- signatures, campaign settings, approval
 @router.get("/tenants/{tenant}/signatures", summary="list_tenant_signatures")
 def list_tenant_signatures(request: Request, tenant: str):
@@ -124,8 +139,8 @@ def update_campaign(request: Request, campaign_id: int, body: schemas.CampaignUp
 
 
 @router.get("/campaigns/{campaign_id}/drafts", summary="list_drafts")
-def list_drafts(request: Request, campaign_id: int, status: str = "draft"):
-    return _run(request, "list_drafts", partial(service.list_drafts, campaign_id=campaign_id, status=status))
+def list_drafts(request: Request, campaign_id: int, status: str = "draft", include_waiting: bool = False):
+    return _run(request, "list_drafts", partial(service.list_drafts, campaign_id=campaign_id, status=status, include_waiting=include_waiting))
 
 
 @router.post("/campaigns/{campaign_id}/drafts/approve", summary="approve_drafts")

@@ -121,6 +121,31 @@ class ApproveDrafts(_Strict):
         return self
 
 
+class WaitCampaign(_Strict):
+    reason: Line(500)
+    confirm: bool = False
+
+
+class _LeadSelection(_Strict):
+    lead_ids: list[int] | None = Field(None, min_length=1, max_length=1000)
+    all: bool = False
+    confirm: bool = False
+
+    @model_validator(mode="after")
+    def _one_selector(self):
+        if bool(self.lead_ids) == bool(self.all):
+            raise ValueError("Entweder lead_ids oder all=true angeben")
+        return self
+
+
+class WaitLeads(_LeadSelection):
+    reason: Line(500)
+
+
+class ReleaseLeads(_LeadSelection):
+    pass
+
+
 class LeadIn(_Strict):
     firma: Line(200)
     anrede: OptLine(120) = None

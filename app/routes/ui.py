@@ -70,7 +70,7 @@ def dashboard(request: Request, sess: dict = Depends(require_login), db: Session
     rows = []
     for t in tenants:
         counts = dict(db.execute(select(Lead.status, func.count()).where(Lead.tenant_id == t.id).group_by(Lead.status)).all())
-        drafts = db.scalar(select(func.count(Message.id)).where(Message.tenant_id == t.id, Message.status == "draft")) or 0
+        drafts = db.scalar(_reviewable(select(func.count(Message.id)).join(Lead).join(Campaign)).where(Message.tenant_id == t.id)) or 0
         rows.append(
             {
                 "tenant": t,
@@ -249,11 +249,16 @@ async def campaign_status(campaign_id: int, request: Request, sess: dict = Depen
     if not c:
         raise HTTPException(404)
     status = f.get("status")
-    if status in ("draft", "active", "paused", "done"):
+    if status in ("draft", "active", "paused", "waiting", "done"):
+        reason = " ".join(f.get("wait_reason", "").split())[:500]
+        if status == "waiting" and not reason:
+            raise HTTPException(400, "Für wartend einen Grund angeben")
         old = c.status
         c.status = status
-        pipeline.log_event(db, "campaign_status", f"{c.name} -> {status}", c.tenant_id)
-        _audit(db, request, sess, "ui_campaign_status", c.tenant_id, {"campaign_id": c.id}, f"{old} -> {status}")
+        c.wait_reason = reason if status == "waiting" else None
+        detail = f"{old} -> {status}" + (f": {reason}" if status == "waiting" else "")
+        pipeline.log_event(db, "campaign_status", f"{c.name} {detail}", c.tenant_id)
+        _audit(db, request, sess, "ui_campaign_status", c.tenant_id, {"campaign_id": c.id}, detail)
     if f.get("action") == "resource":
         c.sourcing_done = False
     db.commit()
@@ -292,9 +297,17 @@ async def lead_action(lead_id: int, request: Request, sess: dict = Depends(requi
     if not lead:
         raise HTTPException(404)
     action = f.get("action")
-    if action in ("stop", "skip", "requeue", "set_email", "generate", "suppress"):
+    reason = " ".join(f.get("wait_reason", "").split())[:500]
+    if action == "wait" and not reason:
+        raise HTTPException(400, "Für wartend einen Grund angeben")
+    if action in ("stop", "skip", "requeue", "set_email", "generate", "suppress", "wait", "release"):
         _audit(db, request, sess, f"ui_lead_{action}", lead.tenant_id, {"lead_id": lead.id, "campaign_id": lead.campaign_id},
-               f.get("email", "").strip() if action == "set_email" else "")
+               f.get("email", "").strip() if action == "set_email" else reason if action == "wait" else "")
+    if lead.status == "waiting" and action in ("requeue", "set_email", "generate"):
+        raise HTTPException(409, "Lead ist wartend, zuerst freigeben")
+    if action in ("stop", "skip"):
+        lead.wait_reason = None
+        lead.wait_prev_status = None
     if action == "stop":
         lead.status = "stopped"
         lead.next_send_at = None
@@ -339,6 +352,11 @@ async def lead_action(lead_id: int, request: Request, sess: dict = Depends(requi
     elif action == "suppress":
         if lead.email:
             pipeline.suppress(db, lead.tenant_id, lead.email, "manual")
+    elif action == "wait":
+        if not pipeline.set_lead_waiting(db, lead, reason):
+            raise HTTPException(409, f"Leads mit Status {lead.status} können nicht auf wartend gesetzt werden")
+    elif action == "release":
+        pipeline.release_lead(db, lead)
     elif action == "note":
         lead.notes = f.get("notes", "").strip()
     db.commit()
@@ -348,13 +366,23 @@ async def lead_action(lead_id: int, request: Request, sess: dict = Depends(requi
 # ---------------------------------------------------------------- review queue
 @router.get("/review", response_class=HTMLResponse)
 def review(request: Request, tenant: int | None = None, sess: dict = Depends(require_login), db: Session = Depends(get_db)):
-    q = db.query(Message).join(Lead).filter(Message.direction == "out", Message.status == "draft")
+    q = _reviewable(db.query(Message).join(Lead).join(Campaign))
     if tenant:
         q = q.filter(Message.tenant_id == tenant)
     drafts = q.order_by(Message.id).limit(50).all()
-    total = db.scalar(select(func.count(Message.id)).where(Message.direction == "out", Message.status == "draft")) or 0
+    total = db.scalar(_reviewable(select(func.count(Message.id)).join(Lead).join(Campaign))) or 0
+    parked = db.scalar(
+        select(func.count(Message.id)).join(Lead).join(Campaign)
+        .where(Message.direction == "out", Message.status == "draft", (Lead.status == "waiting") | (Campaign.status == "waiting"))
+    ) or 0
     tenants = db.query(Tenant).order_by(Tenant.name).all()
-    return render(request, "review.html", sess, drafts=drafts, total=total, tenants=tenants, tenant=tenant)
+    return render(request, "review.html", sess, drafts=drafts, total=total, parked=parked, tenants=tenants, tenant=tenant)
+
+
+def _reviewable(q):
+    """Drafts waiting for approval; drafts of waiting leads or campaigns are parked and left out.
+    q must already join Lead and Campaign."""
+    return q.filter(Message.direction == "out", Message.status == "draft", Lead.status != "waiting", Campaign.status != "waiting")
 
 
 @router.post("/messages/{message_id}/decide")
@@ -368,6 +396,9 @@ async def message_decide(message_id: int, request: Request, sess: dict = Depends
     if decision in ("approve", "regenerate", "discard"):
         _audit(db, request, sess, f"ui_draft_{decision}", m.tenant_id,
                {"draft_id": m.id, "lead_id": m.lead_id, "campaign_id": m.lead.campaign_id}, f"Schritt {m.step + 1} an {m.lead.email}")
+    blocked = pipeline.approval_blocked(m) if decision in ("approve", "regenerate") else None
+    if blocked:
+        raise HTTPException(409, blocked)
     if decision == "approve" and m.status == "draft":
         m.subject = f.get("subject", m.subject).strip()[:300]
         m.body = f.get("body", m.body).strip()

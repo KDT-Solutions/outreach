@@ -1,8 +1,11 @@
 {% macro status_badge(s) -%}
-{% set cls = {'enriched':'info','scheduled':'info','in_sequence':'info','finished':'ok','replied':'ok','needs_review':'warn','no_email':'bad','bounced':'bad','unsubscribed':'bad','stopped':'','skipped':'','draft_failed':'bad','new':''}[s] if s in ['enriched','scheduled','in_sequence','finished','replied','needs_review','no_email','bounced','unsubscribed','stopped','skipped','draft_failed','new'] else '' %}
-<span class="badge {{ cls }}">{{ s }}</span>
+{% set cls = {'enriched':'info','scheduled':'info','in_sequence':'info','finished':'ok','replied':'ok','needs_review':'warn','no_email':'bad','bounced':'bad','unsubscribed':'bad','stopped':'','skipped':'','draft_failed':'bad','new':'','waiting':'warn'}.get(s, '') %}
+<span class="badge {{ cls }}">{{ 'wartend' if s == 'waiting' else s }}</span>
 {%- endmacro %}
 
+{% macro campaign_badge(c) -%}
+<span class="badge {{ 'ok' if c.status=='active' else 'warn' if c.status in ('paused','waiting') else '' }}" {% if c.status=='waiting' and c.wait_reason %}title="{{ c.wait_reason }}"{% endif %}>{{ 'wartend' if c.status == 'waiting' else c.status }}</span>
+{%- endmacro %}
 {% macro dt(value) -%}
 {% if value %}{{ value.strftime('%d.%m.%Y %H:%M') }}{% else %}–{% endif %}
 {%- endmacro %}

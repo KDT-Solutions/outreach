@@ -49,7 +49,9 @@ def suppress(db: Session, tenant_id: int, value: str, reason: str) -> None:
     for lead in db.query(Lead).filter(Lead.tenant_id == tenant_id, Lead.email == value).all():
         if reason == "unsubscribe" and lead.unsubscribed_at is None:
             lead.unsubscribed_at = utcnow()
-        if lead.status in ("needs_review", "scheduled", "in_sequence", "enriched"):
+        if lead.status in ("needs_review", "scheduled", "in_sequence", "enriched", "waiting"):
+            lead.wait_reason = None
+            lead.wait_prev_status = None
             lead.status = "unsubscribed" if reason == "unsubscribe" else "bounced" if reason in ("bounce", "spam") else "stopped"
             lead.next_send_at = None
             for m in lead.messages:
@@ -71,7 +73,64 @@ def discard_pending(lead: Lead, reason: str) -> int:
         lead.status = "enriched" if lead.step == 0 else "in_sequence"
         if lead.step == 0:
             lead.next_send_at = None
+    elif n and lead.status == "waiting" and lead.wait_prev_status in ("needs_review", "scheduled"):
+        # stays parked; on release the worker writes the draft again
+        lead.wait_prev_status = "enriched" if lead.step == 0 else "in_sequence"
+        if lead.step == 0:
+            lead.next_send_at = None
     return n
+
+
+# ---------------------------------------------------------------- waiting (parked by the operator)
+# statuses a lead can be parked from; everything else is final or has nothing to wait for
+WAITABLE_LEAD_STATUSES = ("new", "enriched", "needs_review", "scheduled", "in_sequence", "draft_failed")
+
+
+def set_lead_waiting(db: Session, lead: Lead, reason: str) -> bool:
+    """Park a lead: no enrichment, drafts or sending until released. Its drafts stay as they
+    are but are hidden from the review queue and cannot be approved. Returns False if the
+    lead's status cannot be parked."""
+    if lead.status == "waiting":
+        lead.wait_reason = reason
+        return True
+    if lead.status not in WAITABLE_LEAD_STATUSES:
+        return False
+    lead.wait_prev_status = lead.status
+    lead.wait_reason = reason
+    lead.status = "waiting"
+    log_event(db, "lead_waiting", f"wartend: {reason} (vorher {lead.wait_prev_status})", lead.tenant_id, lead.id)
+    return True
+
+
+def release_lead(db: Session, lead: Lead) -> str | None:
+    """Put a parked lead back where it was. Approved mails whose time has passed go out in
+    the next send window; drafts still need approval. Returns the new status, or None if
+    the lead was not waiting."""
+    if lead.status != "waiting":
+        return None
+    prev = lead.wait_prev_status if lead.wait_prev_status in WAITABLE_LEAD_STATUSES else None
+    if prev is None:
+        prev = "enriched" if lead.step == 0 else "in_sequence"
+    lead.status = prev
+    due = lead.next_send_at
+    if due is not None and due.tzinfo is None:  # SQLite returns naive UTC
+        due = due.replace(tzinfo=timezone.utc)
+    if prev in ("scheduled", "in_sequence") and due is not None and due < datetime.now(timezone.utc):
+        lead.next_send_at = scheduling.schedule_after(lead.campaign.tenant, 0)
+    log_event(db, "lead_released", f"nicht mehr wartend ({lead.wait_reason or '-'}) -> {prev}", lead.tenant_id, lead.id)
+    lead.wait_reason = None
+    lead.wait_prev_status = None
+    return prev
+
+
+def approval_blocked(msg: Message) -> str | None:
+    """Reason a draft cannot be approved right now, or None."""
+    lead = msg.lead
+    if lead.campaign.status == "waiting":
+        return f"Kampagne ist wartend ({lead.campaign.wait_reason or 'ohne Grund'})"
+    if lead.status == "waiting":
+        return f"Lead ist wartend ({lead.wait_reason or 'ohne Grund'})"
+    return None
 
 
 # ---------------------------------------------------------------- sourcing
@@ -353,10 +412,20 @@ def reset_generate_failures(db: Session, lead: Lead, reason: str) -> None:
     log_event(db, "lead_reset", reason, lead.tenant_id, lead.id)
     if lead.status == "draft_failed":
         lead.status = "enriched"
+    elif lead.status == "waiting" and lead.wait_prev_status == "draft_failed":
+        lead.wait_prev_status = "enriched"
 
 
 # ---------------------------------------------------------------- sending
+class ApprovalBlocked(Exception):
+    pass
+
+
 def approve_message(db: Session, msg: Message) -> None:
+    blocked = approval_blocked(msg)
+    if blocked:
+        # last line of defence; callers check approval_blocked first and report it
+        raise ApprovalBlocked(blocked)
     tenant = msg.lead.campaign.tenant
     msg.status = "approved"
     msg.approved_at = datetime.now(timezone.utc)
@@ -512,6 +581,8 @@ def poll_replies(db: Session) -> int:
             else:
                 lead.status = "replied"
                 lead.next_send_at = None
+                lead.wait_reason = None
+                lead.wait_prev_status = None
                 for m in lead.messages:
                     if m.direction == "out" and m.status in ("draft", "approved"):
                         m.status = "failed"

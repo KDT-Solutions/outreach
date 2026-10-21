@@ -92,8 +92,11 @@ class Campaign(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), index=True)
     name: Mapped[str] = mapped_column(String(120))
-    # draft | active | paused | done
+    # draft | active | paused | waiting | done
+    # waiting: parked until a condition is met (wait_reason); no sourcing, drafts or sending,
+    # its drafts are hidden from the review queue and cannot be approved
     status: Mapped[str] = mapped_column(String(20), default="draft")
+    wait_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # One Google Places text query per line, e.g. "Autogarage Basel"
     search_queries: Mapped[str] = mapped_column(Text, default="")
@@ -148,6 +151,7 @@ LEAD_STATUSES = (
     "stopped",      # manually stopped
     "skipped",      # operator skipped
     "draft_failed", # text generation failed repeatedly, waits for a manual fix
+    "waiting",      # parked by the operator until a condition is met (wait_reason); released to wait_prev_status
 )
 
 
@@ -194,6 +198,9 @@ class Lead(Base):
     last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     unsubscribe_token: Mapped[str] = mapped_column(String(64), default=new_token, unique=True)
     notes: Mapped[str] = mapped_column(Text, default="")
+    # status "waiting": why, and the status the lead goes back to when released
+    wait_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    wait_prev_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Optional feedback from the unsubscribe page
     unsubscribe_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)

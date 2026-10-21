@@ -62,6 +62,8 @@ def _ensure_columns() -> None:
             "unsubscribe_comment": "TEXT",
             "unsubscribed_at": "TIMESTAMP WITH TIME ZONE",
             "unsubscribe_source": "VARCHAR(20)",
+            "wait_reason": "TEXT",
+            "wait_prev_status": "VARCHAR(20)",
         },
         "campaigns": {
             "from_name": "VARCHAR(120)",
@@ -69,6 +71,7 @@ def _ensure_columns() -> None:
             "reply_to": "VARCHAR(200)",
             "signature_override": "TEXT",
             "unsubscribe_text_override": "TEXT",
+            "wait_reason": "TEXT",
         },
     }
     obsolete = {"tenants": ["imap_host", "imap_port", "imap_user", "imap_password_enc", "imap_folder"]}

@@ -76,6 +76,9 @@ def approve(message_id: int, edit: MessageEdit | None = None, db: Session = Depe
             m.subject = edit.subject[:300]
         if edit.body:
             m.body = edit.body
+    blocked = pipeline.approval_blocked(m)
+    if blocked:
+        raise HTTPException(409, blocked)
     pipeline.approve_message(db, m)
     pipeline.audit(db, "legacy_approve", "legacy_api_token", "legacy", m.tenant_id, {"draft_id": m.id, "lead_id": m.lead_id, "campaign_id": m.lead.campaign_id})
     db.commit()
