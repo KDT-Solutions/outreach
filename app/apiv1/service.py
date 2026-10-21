@@ -786,3 +786,91 @@ def reject_draft(db: Session, call: Call, draft_id: int, data: schemas.Confirm) 
     m.lead.next_send_at = None
     pipeline.log_event(db, "api_draft_rejected", f"Entwurf {m.id}", m.tenant_id, m.lead_id)
     return {"confirmed": True, "draft_id": m.id, "lead_id": m.lead_id, "lead_status": "skipped"}
+
+
+# ---------------------------------------------------------------- audit log and delivery
+def list_audit_log(db: Session, call: Call, tenant: str | None = None, campaign_id: int | None = None, tool: str | None = None,
+                   since: str | None = None, limit: int = 100, offset: int = 0) -> dict:
+    """Write actions from API, MCP, web UI and the old /api, newest first, for the token's tenants."""
+    if not 1 <= limit <= 500 or offset < 0:
+        raise ApiError(422, "validation_error", "limit 1..500, offset >= 0")
+    tenants = [_tenant(db, call, tenant)] if tenant else _tenants(db, call)
+    slugs = {t.id: t.slug for t in tenants}
+    q = db.query(ApiAudit)
+    cond = ApiAudit.tenant_id.in_(list(slugs))
+    if call.principal.tenants is None and not tenant:
+        cond = cond | ApiAudit.tenant_id.is_(None)
+    q = q.filter(cond)
+    if campaign_id is not None:
+        _campaign(db, call, campaign_id)
+    if tool:
+        q = q.filter(ApiAudit.tool == tool)
+    if since:
+        try:
+            q = q.filter(ApiAudit.created_at >= datetime.fromisoformat(since.replace("Z", "+00:00")))
+        except ValueError:
+            raise ApiError(422, "validation_error", "since als ISO-Datum, z.B. 2026-10-20 oder 2026-10-20T07:00:00Z")
+    rows = q.order_by(ApiAudit.id.desc()).limit(5000).all()
+    if campaign_id is not None:
+        # object_ids is JSON; filtered here so it works the same on Postgres and SQLite
+        rows = [r for r in rows if (r.object_ids or {}).get("campaign_id") == campaign_id]
+    page = rows[offset: offset + limit]
+    return {
+        "total": len(rows),
+        "entries": [
+            {"id": r.id, "created_at": _iso(r.created_at), "actor": r.token_id, "transport": r.transport, "tool": r.tool,
+             "tenant": slugs.get(r.tenant_id), "outcome": r.outcome, "object_ids": r.object_ids, "detail": r.detail, "client_ip": r.client_ip}
+            for r in page
+        ],
+        "note": "Einträge aus der Weboberfläche und der alten /api gibt es erst ab dem Update, das sie protokolliert.",
+    }
+
+
+# delivery state from SMTP2GO events, most decisive first
+DELIVERY_ORDER = ("hard-bounced", "rejected", "spam", "delivered", "soft-bounced", "processed")
+
+
+def _delivery_of(events: list[dict]) -> dict:
+    kinds = {e.get("event") for e in events}
+    state = next((k for k in DELIVERY_ORDER if k in kinds), "unknown")
+    decisive = next((e for e in sorted(events, key=lambda e: e.get("date") or "", reverse=True) if e.get("event") == state), {})
+    out = {"status": state, "opened": "opened" in kinds, "clicked": "clicked" in kinds, "unsubscribed": "unsubscribed" in kinds,
+           "events": sorted(f"{e.get('date')} {e.get('event')}" for e in events)}
+    if state in ("hard-bounced", "rejected", "spam", "soft-bounced"):
+        out["reason"] = (decisive.get("smtp_response") or decisive.get("reason") or decisive.get("error") or "")[:300]
+    return out
+
+
+def get_delivery_status(db: Session, call: Call, campaign_id: int) -> dict:
+    """Per sent mail of the campaign: what SMTP2GO reports (delivered, bounced, ...)."""
+    c = _campaign(db, call, campaign_id)
+    msgs = (
+        db.query(Message).join(Lead)
+        .filter(Lead.campaign_id == c.id, Message.direction == "out", Message.status == "sent")
+        .order_by(Message.sent_at).all()
+    )
+    if not msgs:
+        return {"campaign_id": c.id, "sent": 0, "by_status": {}, "mails": []}
+    api_key = crypto.decrypt(c.tenant.smtp2go_api_key_enc) or get_settings().smtp2go_api_key
+    if not api_key:
+        raise ApiError(409, "smtp_not_configured", "Kein SMTP2GO-Schlüssel für den Mandanten konfiguriert")
+    start = min(m.sent_at for m in msgs if m.sent_at).astimezone(timezone.utc).strftime("%Y-%m-%dT00:00:00Z")
+    by_id: dict[str, list[dict]] = {}
+    try:
+        for e in smtp2go.activity_search(api_key, start, sender=c.sender[1]):
+            by_id.setdefault(str(e.get("email_id")), []).append(e)
+        # mails sent before a sender change: look them up one by one (few)
+        missing = [m for m in msgs if m.provider_id and m.provider_id not in by_id][:20]
+        for m in missing:
+            for e in smtp2go.activity_search(api_key, start, email_id=m.provider_id, max_pages=1):
+                by_id.setdefault(str(e.get("email_id")), []).append(e)
+    except smtp2go.ActivityError as exc:
+        raise ApiError(502, "smtp2go_error", str(exc).replace(api_key, "***")[:300])
+    mails, counts = [], {}
+    for m in msgs:
+        d = _delivery_of(by_id.get(m.provider_id or "", []))
+        counts[d["status"]] = counts.get(d["status"], 0) + 1
+        mails.append({"draft_id": m.id, "lead_id": m.lead_id, "email": m.lead.email, "firma": m.lead.company, "step": m.step + 1,
+                      "approved_at": _iso(m.approved_at), "sent_at": _iso(m.sent_at), "provider_id": m.provider_id, **d})
+    return {"campaign_id": c.id, "sent": len(msgs), "by_status": counts, "mails": mails,
+            "source": "SMTP2GO activity/search; 'unknown' = kein Ereignis gefunden (z.B. älter als die Aufbewahrung bei SMTP2GO)"}

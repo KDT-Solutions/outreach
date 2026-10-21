@@ -274,7 +274,8 @@ class DailyCounter(Base):
 
 
 class ApiAudit(Base):
-    """Every write call through the automation API (REST /api/v1 and MCP), previews included."""
+    """Every write call through the automation API (REST /api/v1 and MCP), previews included,
+    plus the sending-relevant actions in the web UI and the old /api (approvals, status changes)."""
 
     __tablename__ = "api_audit"
 
@@ -283,7 +284,7 @@ class ApiAudit(Base):
     token_id: Mapped[str] = mapped_column(String(40))
     tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id"), nullable=True, index=True)
     tool: Mapped[str] = mapped_column(String(60))
-    transport: Mapped[str] = mapped_column(String(10))  # rest | mcp
+    transport: Mapped[str] = mapped_column(String(10))  # rest | mcp | ui | legacy (old /api with API_TOKEN)
     client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # preview | applied | error
     outcome: Mapped[str] = mapped_column(String(20))

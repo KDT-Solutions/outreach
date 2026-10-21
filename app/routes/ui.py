@@ -30,6 +30,11 @@ def render(request: Request, name: str, sess: dict | None = None, **ctx):
     return templates.TemplateResponse(request, name, ctx)
 
 
+def _audit(db: Session, request: Request, sess: dict, tool: str, tenant_id: int | None, ids: dict, detail: str = "") -> None:
+    """Sending-relevant UI actions go into the same audit log as the API calls."""
+    pipeline.audit(db, tool, f"ui:{sess.get('u', '?')}", "ui", tenant_id, ids, detail, request.client.host if request.client else None)
+
+
 def _redirect(url: str) -> RedirectResponse:
     return RedirectResponse(url, status_code=303)
 
@@ -209,6 +214,8 @@ async def campaign_save(request: Request, sess: dict = Depends(require_csrf), db
     c.offer = f.get("offer", "").strip()
     c.language = f.get("language", "de").strip()[:10]
     c.tone = f.get("tone", "").strip()
+    if cid and c.auto_approve != (f.get("auto_approve") == "on"):
+        _audit(db, request, sess, "ui_campaign_auto_approve", c.tenant_id, {"campaign_id": c.id}, f"auto_approve -> {f.get('auto_approve') == 'on'}")
     c.auto_approve = f.get("auto_approve") == "on"
     c.max_leads = int(f.get("max_leads") or 200)
     try:
@@ -243,8 +250,10 @@ async def campaign_status(campaign_id: int, request: Request, sess: dict = Depen
         raise HTTPException(404)
     status = f.get("status")
     if status in ("draft", "active", "paused", "done"):
+        old = c.status
         c.status = status
         pipeline.log_event(db, "campaign_status", f"{c.name} -> {status}", c.tenant_id)
+        _audit(db, request, sess, "ui_campaign_status", c.tenant_id, {"campaign_id": c.id}, f"{old} -> {status}")
     if f.get("action") == "resource":
         c.sourcing_done = False
     db.commit()
@@ -283,6 +292,9 @@ async def lead_action(lead_id: int, request: Request, sess: dict = Depends(requi
     if not lead:
         raise HTTPException(404)
     action = f.get("action")
+    if action in ("stop", "skip", "requeue", "set_email", "generate", "suppress"):
+        _audit(db, request, sess, f"ui_lead_{action}", lead.tenant_id, {"lead_id": lead.id, "campaign_id": lead.campaign_id},
+               f.get("email", "").strip() if action == "set_email" else "")
     if action == "stop":
         lead.status = "stopped"
         lead.next_send_at = None
@@ -353,6 +365,9 @@ async def message_decide(message_id: int, request: Request, sess: dict = Depends
         raise HTTPException(404)
     decision = f.get("decision")
     back = f.get("back") or "/review"
+    if decision in ("approve", "regenerate", "discard"):
+        _audit(db, request, sess, f"ui_draft_{decision}", m.tenant_id,
+               {"draft_id": m.id, "lead_id": m.lead_id, "campaign_id": m.lead.campaign_id}, f"Schritt {m.step + 1} an {m.lead.email}")
     if decision == "approve" and m.status == "draft":
         m.subject = f.get("subject", m.subject).strip()[:300]
         m.body = f.get("body", m.body).strip()

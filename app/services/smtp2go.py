@@ -10,6 +10,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 SEND_URL = "https://api.smtp2go.com/v3/email/send"
+ACTIVITY_URL = "https://api.smtp2go.com/v3/activity/search"
 
 
 class SendError(RuntimeError):
@@ -99,3 +100,30 @@ def parse_webhook(payload: dict) -> tuple[str | None, str | None, str | None, st
     if event == "bounce" and str(payload.get("bounce_type", "")).lower().startswith("soft"):
         event = "soft_bounce"
     return event, (rcpt.lower() if isinstance(rcpt, str) else None), email_id, message_id
+
+
+class ActivityError(RuntimeError):
+    pass
+
+
+def activity_search(api_key: str, start_date: str, sender: str | None = None, email_id: str | None = None, max_pages: int = 5) -> list[dict]:
+    """Events (processed, delivered, bounces, opens, ...) since start_date (UTC, ISO 8601).
+    Filter by sender address or one email_id; pages through continue_token."""
+    events: list[dict] = []
+    body: dict = {"start_date": start_date, "limit": 1000}
+    if sender:
+        body["search_sender"] = sender
+    if email_id:
+        body["search_email_id"] = email_id
+    with httpx.Client(timeout=30) as client:
+        for _ in range(max_pages):
+            r = client.post(ACTIVITY_URL, json=body, headers={"X-Smtp2go-Api-Key": api_key, "Content-Type": "application/json", "Accept": "application/json"})
+            if r.status_code != 200:
+                raise ActivityError(f"SMTP2GO activity {r.status_code}: {r.text[:300]}")
+            data = r.json().get("data") or {}
+            events.extend(data.get("events") or [])
+            token = data.get("continue_token")
+            if not token:
+                break
+            body["continue_token"] = token
+    return events

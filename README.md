@@ -152,6 +152,8 @@ Fehler sind immer JSON:
 | `send_test` | `POST /api/v1/campaigns/{id}/send-test` |
 | `start_campaign` / `pause_campaign` / `stop_campaign` | `POST /api/v1/campaigns/{id}/start` / `pause` / `stop` |
 | `get_stats` | `GET /api/v1/campaigns/{id}/stats` |
+| `get_delivery_status` | `GET /api/v1/campaigns/{id}/delivery` (Zustellstatus pro Mail laut SMTP2GO) |
+| `list_audit_log` | `GET /api/v1/audit?tenant=&campaign_id=&tool=&since=` |
 | `update_campaign` | `PATCH /api/v1/campaigns/{id}` |
 | `list_drafts` | `GET /api/v1/campaigns/{id}/drafts?status=draft` |
 | `approve_drafts` | `POST /api/v1/campaigns/{id}/drafts/approve` |
@@ -165,6 +167,9 @@ Regeln:
   nichts. `start_campaign` verlangt zusätzlich `"confirm_send": true`.
 - Jeder schreibende Aufruf, auch eine Vorschau oder ein Fehler, landet in der Tabelle `api_audit`
   (Zeit, Token-Kennung `tok_…`, Mandant, Werkzeug, betroffene IDs, Ergebnis).
+  Dort stehen auch die versandrelevanten Aktionen aus der Weboberfläche (Freigeben, Verwerfen,
+  Neu schreiben, Lead-Aktionen, Kampagnenstatus, `auto_approve`; Kennung `ui:<benutzer>`) und
+  Freigaben über die alte `/api` (`legacy_api_token`). Lesen mit `list_audit_log`.
 - Schritte sind 1-basiert. `delay_days` zählt ab dem vorherigen Versand, der erste Schritt hat 0.
 - `body_text` ist Klartext. Erlaubte Platzhalter in Betreff und Text: `{{anrede}}`, `{{vorname}}`,
   `{{nachname}}`, `{{firma}}`, `{{ort}}`, `{{email}}`. `anrede` wird unverändert eingesetzt

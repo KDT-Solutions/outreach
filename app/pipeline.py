@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from . import crypto
 from .config import get_settings
-from .models import Campaign, Event, Lead, Message, Suppression, Tenant, utcnow
+from .models import ApiAudit, Campaign, Event, Lead, Message, Suppression, Tenant, utcnow
 from .services import crawler, hunter, llm, mailtext, places, scheduling, signature, smtp2go, templating, verify, zammad
 
 log = logging.getLogger(__name__)
@@ -20,6 +20,13 @@ log = logging.getLogger(__name__)
 
 def log_event(db: Session, kind: str, detail: str = "", tenant_id: int | None = None, lead_id: int | None = None) -> None:
     db.add(Event(kind=kind, detail=detail[:4000], tenant_id=tenant_id, lead_id=lead_id))
+
+
+def audit(db: Session, tool: str, actor: str, transport: str, tenant_id: int | None, ids: dict | None = None,
+          detail: str = "", client_ip: str | None = None) -> None:
+    """Audit entry for a write action outside the automation API (web UI, old /api)."""
+    db.add(ApiAudit(token_id=actor[:40], tenant_id=tenant_id, tool=tool[:60], transport=transport, client_ip=client_ip,
+                    outcome="applied", object_ids=ids or {}, detail=detail[:2000]))
 
 
 def is_suppressed(db: Session, tenant_id: int, email: str | None) -> bool:
