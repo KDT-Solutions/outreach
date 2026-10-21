@@ -5,10 +5,12 @@ Self-hosted, multi-tenant B2B cold-email outreach for Swiss SMEs. Replaces an
 
 1. **Lead sourcing** – Google Places (New) text search per "industry + town" query,
    deduplicated per tenant and domain.
-2. **Enrichment** – crawls the company website (home, Impressum, Kontakt), extracts
+2. **Enrichment** – crawls the company website (home, management/team/about pages, Kontakt,
+   Impressum), extracts
    e-mail addresses, falls back to Hunter.io domain search, checks the MX record.
-3. **Copy** – Claude writes subject and body per lead and step, reads the contact
-   person out of the Impressum, and builds the salutation. Drafts land in a review
+3. **Copy** – Claude writes subject and body per lead and step, picks the best contact
+   person from the team/about/contact pages (owner or managing director first, the
+   Impressum only as fallback), and builds the salutation. Drafts land in a review
    queue unless the campaign is set to auto-approve.
 4. **Sending & replies** – SMTP2GO per tenant, business-hours window, daily cap,
    jitter, one-click unsubscribe (RFC 8058), bounce/spam/unsubscribe webhooks,
@@ -180,7 +182,7 @@ Regeln:
 Beide nutzen dieselbe Google-Places-Suche und denselben Crawler wie die Weboberfläche, im
 API-Modus mit diesen Regeln:
 
-- Pro Domain höchstens 3 Seiten (Startseite mit Footer, dann Impressum, Kontakt, Über uns),
+- Pro Domain höchstens 3 Seiten (Startseite mit Footer, dann Geschäftsleitung/Team/Über uns und Kontakt),
   10 s Timeout pro Seite, User-Agent aus `CRAWL_USER_AGENT`.
 - Allgemeine Adressen zuerst (`info@`, `kontakt@`, `office@`, `mail@`), sonst die erste Adresse
   der eigenen Domain. Adressen anderer Domains (Webagentur, Freemail) werden verworfen.

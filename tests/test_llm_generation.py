@@ -121,3 +121,18 @@ def test_set_salutation_is_kept_and_passed_to_model(monkeypatch, ai_lead):
     prompt = client.calls[0]["messages"][0]["content"]
     assert "Vorgegebene Anrede: Guten Tag Frau Muster" in prompt
     assert client.calls[0]["max_tokens"] == llm.MAX_TOKENS
+
+
+def test_prompt_uses_team_pages_for_the_contact_person(monkeypatch, ai_lead):
+    with SessionLocal() as db:
+        lead = db.get(Lead, ai_lead)
+        lead.team_excerpt = "Anna Muster, Geschäftsführerin"
+        lead.impressum_excerpt = "Verwaltungsrat: Carl Rat"
+        db.commit()
+        client = _fake(monkeypatch, [GOOD])
+        lead = db.get(Lead, ai_lead)
+        llm.write_mail(lead.campaign.tenant, lead.campaign, lead, 0, [])
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "Auszug Team / Über uns / Kontakt:\nAnna Muster, Geschäftsführerin" in prompt
+    assert "Auszug Impressum:\nVerwaltungsrat: Carl Rat" in prompt
+    assert "Verwaltungsräte" in prompt

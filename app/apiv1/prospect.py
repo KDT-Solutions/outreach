@@ -49,6 +49,7 @@ class Prospect:
     candidates: list[str] = field(default_factory=list)
     site_excerpt: str | None = None
     impressum_excerpt: str | None = None
+    team_excerpt: str | None = None
     contact_name: str | None = None
     note: str | None = None
     error: str | None = None
@@ -121,6 +122,7 @@ def _discover(p: Prospect, language: str, resolve: bool) -> Prospect:
         res = found.crawl
         p.candidates = res.emails[:10]
         p.site_excerpt, p.impressum_excerpt = res.site_excerpt or None, res.impressum_excerpt or None
+        p.team_excerpt = res.team_excerpt or None
         p.contact_name = found.contact_name
         if not found.email:
             p.note = res.error
@@ -215,6 +217,7 @@ def _store(db: Session, c: Campaign, prospects: list[Prospect], rows: list[dict]
             phone=p.phone, website=p.website, domain=domain, place_types=",".join(p.types)[:300] or None,
             source_query=source_query[:200], language=language, email=p.email, email_source=p.source, email_mx_ok=p.mx_ok,
             email_candidates=",".join(p.candidates) or None, site_excerpt=p.site_excerpt, impressum_excerpt=p.impressum_excerpt,
+            team_excerpt=p.team_excerpt,
             contact_name=p.contact_name, status=row["status"], notes=lead_note(p),
         )
         db.add(lead)

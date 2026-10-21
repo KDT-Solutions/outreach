@@ -60,7 +60,8 @@ def test_crawl_respects_page_limit():
 
     with mock.patch.object(crawler, "_fetch", side_effect=fake_fetch):
         res = crawler.crawl("https://m.example/", prefer_generic=True, own_domain_only=True, max_pages=3, timeout=10)
-    assert fetched == ["https://m.example/", "https://m.example/impressum", "https://m.example/kontakt"]
+    # people page and contact page before the Impressum
+    assert fetched == ["https://m.example/", "https://m.example/team", "https://m.example/kontakt"]
     assert res.best_email == "info@m.example"
 
 

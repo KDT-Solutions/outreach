@@ -177,6 +177,7 @@ def enrich_lead(db: Session, lead: Lead) -> None:
     lead.domain = res.domain or lead.domain
     lead.site_excerpt = res.site_excerpt or None
     lead.impressum_excerpt = res.impressum_excerpt or None
+    lead.team_excerpt = res.team_excerpt or None
     email, source = found.email, found.source
     lead.email_candidates = ",".join(res.emails[:10]) or None
     if found.contact_name:
