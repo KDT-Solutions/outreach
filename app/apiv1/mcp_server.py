@@ -27,6 +27,7 @@ start_campaign braucht zusätzlich confirm_send=true. Schritte sind 1-basiert.
 Platzhalter in Betreff und Text: {{anrede}}, {{vorname}}, {{nachname}}, {{firma}}, {{ort}}, {{email}}. body_text ist Klartext, kein HTML.
 Signatur: Kampagnen-Override > Mandantensignatur in der Sprache des Leads > in der Kampagnensprache > Standardsignatur; gleiches für den Abmeldetext. Platzhalter in Signaturen: {{sender_name}}, {{sender_email}}, {{reply_to}}, {{unsubscribe_url}}.
 Freigabe per API: list_drafts zeigt wartende Entwürfe, approve_drafts gibt sie frei, reject_draft verwirft einen.
+Kontrolle: list_audit_log zeigt, wer was wann ausgelöst hat (API, MCP, Weboberfläche); get_delivery_status zeigt pro gesendeter Mail den Zustellstatus bei SMTP2GO.
 
 Freigabe (auto_approve):
 - auto_approve=false (Standard): Jeder Mailentwurf, auch jedes Follow-up, bekommt Lead-Status "needs_review" und wartet in der Weboberfläche unter /review. Erst nach Freigabe durch Kim (Weboberfläche oder approve_drafts) wird die Mail terminiert und im Sendefenster verschickt. Ohne Freigabe geht nichts raus, egal wie lange ein Entwurf liegt. Kampagne "active" heisst also nur: Leads werden gesucht, angereichert und Entwürfe geschrieben.
@@ -287,6 +288,17 @@ def search_leads(
 def enrich_leads(ctx: Context, campaign_id: int, leads: list[EnrichArg], confirm: Confirm = False) -> dict:
     data = _model(schemas.LeadEnrich, leads=[l.model_dump(exclude_unset=True) for l in leads], confirm=confirm)
     return _run(ctx, "enrich_leads", lambda db, call: prospect.enrich_leads(db, call, campaign_id, data), write=True)
+
+
+@mcp.tool(description="Audit-Log: schreibende Aktionen aus API, MCP, Weboberfläche (z.B. Freigaben, Statuswechsel) und alter /api, neueste zuerst. Filter: tenant, campaign_id, tool, since (ISO-Datum).")
+def list_audit_log(ctx: Context, tenant: str | None = None, campaign_id: int | None = None, tool: str | None = None,
+                   since: str | None = None, limit: int = 100, offset: int = 0) -> dict:
+    return _run(ctx, "list_audit_log", lambda db, call: service.list_audit_log(db, call, tenant, campaign_id, tool, since, limit, offset))
+
+
+@mcp.tool(description="Zustellstatus jeder gesendeten Mail einer Kampagne laut SMTP2GO: delivered, soft-/hard-bounced, rejected, spam, processed, dazu geöffnet/geklickt und Bounce-Grund.")
+def get_delivery_status(ctx: Context, campaign_id: int) -> dict:
+    return _run(ctx, "get_delivery_status", lambda db, call: service.get_delivery_status(db, call, campaign_id))
 
 
 def allowed_hosts() -> list[str]:

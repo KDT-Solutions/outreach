@@ -77,6 +77,7 @@ def approve(message_id: int, edit: MessageEdit | None = None, db: Session = Depe
         if edit.body:
             m.body = edit.body
     pipeline.approve_message(db, m)
+    pipeline.audit(db, "legacy_approve", "legacy_api_token", "legacy", m.tenant_id, {"draft_id": m.id, "lead_id": m.lead_id, "campaign_id": m.lead.campaign_id})
     db.commit()
     return {"ok": True, "next_send_at": m.lead.next_send_at.isoformat() if m.lead.next_send_at else None}
 

@@ -147,3 +147,16 @@ def search_leads(request: Request, campaign_id: int, body: schemas.LeadSearch):
 @router.post("/campaigns/{campaign_id}/leads/enrich", summary="enrich_leads")
 def enrich_leads(request: Request, campaign_id: int, body: schemas.LeadEnrich):
     return _run(request, "enrich_leads", partial(prospect.enrich_leads, campaign_id=campaign_id, data=body), write=True)
+
+
+# ---------------------------------------------------------------- audit log and delivery
+@router.get("/audit", summary="list_audit_log")
+def list_audit_log(request: Request, tenant: str | None = None, campaign_id: int | None = None, tool: str | None = None,
+                   since: str | None = None, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
+    return _run(request, "list_audit_log", partial(service.list_audit_log, tenant=tenant, campaign_id=campaign_id, tool=tool,
+                                                    since=since, limit=limit, offset=offset))
+
+
+@router.get("/campaigns/{campaign_id}/delivery", summary="get_delivery_status")
+def get_delivery_status(request: Request, campaign_id: int):
+    return _run(request, "get_delivery_status", partial(service.get_delivery_status, campaign_id=campaign_id))
