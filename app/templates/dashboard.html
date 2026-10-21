@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_macros.html" import status_badge, dt %}
+{% extends "base.html" %}{% from "_macros.html" import status_badge, campaign_badge, dt %}
 {% block content %}
 <h1>Übersicht</h1>
 {% if not rows %}<div class="card">Noch kein Mandant angelegt. <a href="/tenants/new">Ersten Mandanten anlegen</a>.</div>{% endif %}
@@ -24,7 +24,7 @@
 <h2>Kampagnen</h2>
 <table><tr><th>Name</th><th>Mandant</th><th>Status</th><th>Sourcing</th><th>Freigabe</th></tr>
 {% for c in campaigns %}
-<tr><td><a href="/campaigns/{{ c.id }}">{{ c.name }}</a></td><td>{{ c.tenant.name }}</td><td><span class="badge {{ 'ok' if c.status=='active' else '' }}">{{ c.status }}</span></td><td>{{ 'erledigt' if c.sourcing_done else 'ausstehend' }}</td><td>{{ 'automatisch' if c.auto_approve else 'manuell' }}</td></tr>
+<tr><td><a href="/campaigns/{{ c.id }}">{{ c.name }}</a></td><td>{{ c.tenant.name }}</td><td>{{ campaign_badge(c) }}</td><td>{{ 'erledigt' if c.sourcing_done else 'ausstehend' }}</td><td>{{ 'automatisch' if c.auto_approve else 'manuell' }}</td></tr>
 {% else %}<tr><td colspan="5" class="muted">Keine Kampagnen. <a href="/campaigns/new">Neue Kampagne</a></td></tr>{% endfor %}
 </table>
 

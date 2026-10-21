@@ -39,6 +39,7 @@ def test_mcp_lists_all_tools(client):
         "delete_lead", "unsuppress_lead", "set_sequence", "preview_email", "send_test", "start_campaign", "pause_campaign", "stop_campaign", "get_stats",
         "list_tenant_signatures", "set_tenant_signature", "update_campaign", "list_drafts", "approve_drafts", "reject_draft",
         "search_leads", "enrich_leads", "list_audit_log", "get_delivery_status",
+        "wait_campaign", "wait_leads", "release_leads",
     }
 
 

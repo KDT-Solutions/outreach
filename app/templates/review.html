@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% from "_macros.html" import status_badge %}
 {% block content %}
-<h1>Freigabe <span class="badge warn">{{ total }} offen</span></h1>
+<h1>Freigabe <span class="badge warn">{{ total }} offen</span>{% if parked %} <span class="badge" title="Entwürfe wartender Kampagnen oder Leads, hier ausgeblendet">{{ parked }} wartend</span>{% endif %}</h1>
 <form method="get" action="/review" class="filters">
 <div><label>Mandant</label><select name="tenant"><option value="">alle</option>{% for t in tenants %}<option value="{{ t.id }}" {{ 'selected' if tenant==t.id }}>{{ t.name }}</option>{% endfor %}</select></div>
 <div><button class="secondary">Filtern</button></div>

@@ -3,7 +3,7 @@
 <h1>Leads</h1>
 <form method="get" action="/leads" class="filters">
 <div><label>Kampagne</label><select name="campaign"><option value="">alle</option>{% for c in campaigns %}<option value="{{ c.id }}" {{ 'selected' if campaign==c.id }}>{{ c.name }}</option>{% endfor %}</select></div>
-<div><label>Status</label><select name="status"><option value="">alle</option>{% for s in lead_statuses %}<option value="{{ s }}" {{ 'selected' if status==s }}>{{ s }}</option>{% endfor %}</select></div>
+<div><label>Status</label><select name="status"><option value="">alle</option>{% for s in lead_statuses %}<option value="{{ s }}" {{ 'selected' if status==s }}>{{ 'wartend' if s == 'waiting' else s }}</option>{% endfor %}</select></div>
 <div><label>Suche</label><input type="text" name="q" value="{{ q }}" placeholder="Firma, E-Mail, Domain"></div>
 <div><button class="secondary">Filtern</button></div>
 </form>

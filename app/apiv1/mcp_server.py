@@ -27,12 +27,14 @@ start_campaign braucht zusätzlich confirm_send=true. Schritte sind 1-basiert.
 Platzhalter in Betreff und Text: {{anrede}}, {{vorname}}, {{nachname}}, {{firma}}, {{ort}}, {{email}}. body_text ist Klartext, kein HTML.
 Signatur: Kampagnen-Override > Mandantensignatur in der Sprache des Leads > in der Kampagnensprache > Standardsignatur; gleiches für den Abmeldetext. Platzhalter in Signaturen: {{sender_name}}, {{sender_email}}, {{reply_to}}, {{unsubscribe_url}}.
 Freigabe per API: list_drafts zeigt wartende Entwürfe, approve_drafts gibt sie frei, reject_draft verwirft einen.
+Wartend (Status waiting, mit Grund): wait_campaign parkt eine ganze Kampagne (zurück mit start_campaign), wait_leads parkt einzelne Leads (zurück mit release_leads). Geparkt heisst: nichts wird entworfen oder gesendet, Entwürfe verschwinden aus der Freigabe (/review) und approve_drafts überspringt sie. Gedacht für Kampagnen oder Leads, die erst nach einer Bedingung raus sollen (z.B. Antworten einer anderen Kampagne, fehlende Unterlagen).
 Kontrolle: list_audit_log zeigt, wer was wann ausgelöst hat (API, MCP, Weboberfläche); get_delivery_status zeigt pro gesendeter Mail den Zustellstatus bei SMTP2GO.
 
 Freigabe (auto_approve):
 - auto_approve=false (Standard): Jeder Mailentwurf, auch jedes Follow-up, bekommt Lead-Status "needs_review" und wartet in der Weboberfläche unter /review. Erst nach Freigabe durch Kim (Weboberfläche oder approve_drafts) wird die Mail terminiert und im Sendefenster verschickt. Ohne Freigabe geht nichts raus, egal wie lange ein Entwurf liegt. Kampagne "active" heisst also nur: Leads werden gesucht, angereichert und Entwürfe geschrieben.
 - auto_approve=true: Entwürfe werden ohne Sichtung sofort als freigegeben gespeichert und im nächsten Sendefenster verschickt. Nur setzen, wenn Kim das ausdrücklich will.
-Lead-Status: new (gefunden) -> enriched (E-Mail gefunden) -> needs_review (Entwurf wartet) -> scheduled (freigegeben, wartet aufs Sendefenster) -> in_sequence (mindestens eine Mail gesendet, weitere Schritte offen) -> finished (alle Schritte gesendet). Abbrüche: replied (Antwort via Zammad erkannt, Sequenz gestoppt), bounced, unsubscribed, stopped, skipped, no_email, draft_failed (Entwurf 3x gescheitert, wartet auf Korrektur per update_lead; last_error zeigt die Modellantwort).
+Lead-Status: new (gefunden) -> enriched (E-Mail gefunden) -> needs_review (Entwurf wartet) -> scheduled (freigegeben, wartet aufs Sendefenster) -> in_sequence (mindestens eine Mail gesendet, weitere Schritte offen) -> finished (alle Schritte gesendet). Abbrüche: replied (Antwort via Zammad erkannt, Sequenz gestoppt), bounced, unsubscribed, stopped, skipped, no_email, draft_failed (Entwurf 3x gescheitert, wartet auf Korrektur per update_lead; last_error zeigt die Modellantwort), waiting (vom Betreiber geparkt, wait_reason und status_after_release im Lead).
+Kampagnen-Status: draft, active, paused, waiting (geparkt mit wait_reason, Entwürfe ausgeblendet), done.
 Sendefenster pro Mandant: standardmässig Mo-Fr 9-17 Uhr, Tageslimit 40, Versand mit Zufallsverzögerung; Follow-ups werden einen Tag vor Fälligkeit als Entwurf vorbereitet.
 Ausgehende Mails werden nicht in Zammad erfasst; Antworten kommen über das Zammad-Postfach des Mandanten herein, stoppen die Sequenz und erhalten eine interne Notiz mit Lead-Link."""
 
@@ -212,6 +214,24 @@ def stop_campaign(ctx: Context, campaign_id: int, confirm: Confirm = False) -> d
     return _run(ctx, "stop_campaign", lambda db, call: service.stop_campaign(db, call, campaign_id, data), write=True)
 
 
+@mcp.tool(description="Kampagne auf wartend setzen, bis eine Bedingung erfüllt ist (reason, z.B. 'wartet auf Antworten der Partner-Umfrage'). Kein Sourcing, keine Entwürfe, kein Versand; ihre Entwürfe verschwinden aus der Freigabe und lassen sich nicht freigeben. Wieder aktiv mit start_campaign.")
+def wait_campaign(ctx: Context, campaign_id: int, reason: str, confirm: Confirm = False) -> dict:
+    data = _model(schemas.WaitCampaign, reason=reason, confirm=confirm)
+    return _run(ctx, "wait_campaign", lambda db, call: service.wait_campaign(db, call, campaign_id, data), write=True)
+
+
+@mcp.tool(description="Einzelne Leads (lead_ids) oder alle Leads einer Kampagne (all=true) auf wartend setzen, mit Grund (reason). Für sie wird nichts entworfen oder gesendet, ihre Entwürfe verschwinden aus der Freigabe. Abgeschlossene Leads (finished, replied, bounced usw.) bleiben unverändert.")
+def wait_leads(ctx: Context, campaign_id: int, reason: str, lead_ids: list[int] | None = None, all: bool = False, confirm: Confirm = False) -> dict:
+    data = _model(schemas.WaitLeads, reason=reason, lead_ids=lead_ids, all=all, confirm=confirm)
+    return _run(ctx, "wait_leads", lambda db, call: service.wait_leads(db, call, campaign_id, data), write=True)
+
+
+@mcp.tool(description="Wartende Leads (lead_ids oder all=true) wieder in ihren vorherigen Status setzen. Entwürfe brauchen danach weiterhin die Freigabe (auto_approve=false); bereits freigegebene Mails gehen im nächsten Sendefenster raus.")
+def release_leads(ctx: Context, campaign_id: int, lead_ids: list[int] | None = None, all: bool = False, confirm: Confirm = False) -> dict:
+    data = _model(schemas.ReleaseLeads, lead_ids=lead_ids, all=all, confirm=confirm)
+    return _run(ctx, "release_leads", lambda db, call: service.release_leads(db, call, campaign_id, data), write=True)
+
+
 @mcp.tool(description="Kennzahlen: gesendet, Bounces, Abmeldungen, Antworten (aus dem Zammad-Abgleich).")
 def get_stats(ctx: Context, campaign_id: int) -> dict:
     return _run(ctx, "get_stats", lambda db, call: service.get_stats(db, call, campaign_id))
@@ -244,9 +264,9 @@ def update_campaign(
     return _run(ctx, "update_campaign", lambda db, call: service.update_campaign(db, call, campaign_id, data), write=True)
 
 
-@mcp.tool(description="Wartende Entwürfe einer Kampagne mit Lead, Schritt, Betreff und fertig gerendertem Text. status: draft (wartet auf Freigabe) oder approved (freigegeben, noch nicht gesendet).")
-def list_drafts(ctx: Context, campaign_id: int, status: str = "draft") -> dict:
-    return _run(ctx, "list_drafts", lambda db, call: service.list_drafts(db, call, campaign_id, status))
+@mcp.tool(description="Entwürfe einer Kampagne mit Lead, Schritt, Betreff und fertig gerendertem Text. status: draft (wartet auf Freigabe) oder approved (freigegeben, noch nicht gesendet). Entwürfe wartender Leads oder einer wartenden Kampagne nur mit include_waiting=true (parked_waiting zählt sie).")
+def list_drafts(ctx: Context, campaign_id: int, status: str = "draft", include_waiting: bool = False) -> dict:
+    return _run(ctx, "list_drafts", lambda db, call: service.list_drafts(db, call, campaign_id, status, include_waiting))
 
 
 @mcp.tool(description="Entwürfe freigeben: lead_ids oder all=true. Freigegebene Mails gehen im Sendefenster raus, sofern die Kampagne aktiv ist.")

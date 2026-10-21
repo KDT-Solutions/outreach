@@ -25,8 +25,8 @@ from .security import Principal
 log = logging.getLogger(__name__)
 
 # lead statuses that still lead to mails
-ACTIVE_LEAD_STATUSES = ("new", "enriched", "needs_review", "scheduled", "in_sequence", "draft_failed")
-CAMPAIGN_STATUSES = ("draft", "active", "paused", "done")
+ACTIVE_LEAD_STATUSES = ("new", "enriched", "needs_review", "scheduled", "in_sequence", "draft_failed", "waiting")
+CAMPAIGN_STATUSES = ("draft", "active", "paused", "waiting", "done")
 # API field -> Lead attribute
 LEAD_FIELDS = {
     "firma": "company",
@@ -209,6 +209,8 @@ def campaign_dict(db: Session, c: Campaign, full: bool = False) -> dict:
         "auto_approve": c.auto_approve, "sender_name": name, "sender_email": email, "reply_to": reply_to,
         "created_at": _iso(c.created_at),
     }
+    if c.status == "waiting":
+        d["wait_reason"] = c.wait_reason
     if full:
         d["signature_override"] = c.signature_override
         d["unsubscribe_text_override"] = c.unsubscribe_text_override
@@ -224,6 +226,8 @@ def lead_dict(l: Lead) -> dict:
         email_mx_ok=l.email_mx_ok, next_send_at=_iso(l.next_send_at), last_sent_at=_iso(l.last_sent_at),
         last_error=l.last_error, created_at=_iso(l.created_at),
     )
+    if l.status == "waiting":
+        d.update(wait_reason=l.wait_reason, status_after_release=l.wait_prev_status)
     if l.status == "unsubscribed" or l.unsubscribe_reason:
         d.update(unsubscribe_reason=l.unsubscribe_reason, unsubscribe_comment=l.unsubscribe_comment, unsubscribed_at=_iso(l.unsubscribed_at), unsubscribe_source=l.unsubscribe_source)
     return d
@@ -272,6 +276,11 @@ def get_stats(db: Session, call: Call, campaign_id: int) -> dict:
     )
     auto = sum(n for cls, n in replies.items() if cls in ("out_of_office", "auto_reply"))
     drafts = db.scalar(select(func.count(Message.id)).where(Message.lead_id.in_(lead_ids), Message.direction == "out", Message.status == "draft")) or 0
+    drafts_parked = db.scalar(
+        select(func.count(Message.id)).join(Lead).where(Lead.campaign_id == c.id, Message.direction == "out", Message.status == "draft", Lead.status == "waiting")
+    ) or 0
+    if c.status == "waiting":
+        drafts_parked = drafts
     unsub_reasons = dict(
         db.execute(
             select(Lead.unsubscribe_reason, func.count()).where(Lead.campaign_id == c.id, Lead.status == "unsubscribed").group_by(Lead.unsubscribe_reason)
@@ -289,7 +298,8 @@ def get_stats(db: Session, call: Call, campaign_id: int) -> dict:
         "replies": sum(replies.values()) - auto,
         "auto_replies": auto,
         "replies_by_class": {k or "unknown": v for k, v in replies.items()},
-        "drafts_waiting_for_approval": drafts,
+        "drafts_waiting_for_approval": drafts - drafts_parked,
+        "drafts_parked_waiting": drafts_parked,
         "leads_by_status": statuses,
         "replies_source": {"zammad_configured": bool(t.zammad_url and t.zammad_token_enc), "last_poll": _iso(t.zammad_last_poll)},
     }
@@ -341,6 +351,7 @@ def start_campaign(db: Session, call: Call, campaign_id: int, data: schemas.Star
     preview = {
         "campaign": campaign_dict(db, c),
         "status": {"from": c.status, "to": "active"},
+        **({"wait_reason_cleared": c.wait_reason} if c.status == "waiting" else {}),
         "steps": len(c.steps or []),
         "leads_that_will_be_mailed": sum(n for s, n in counts.items() if s in ACTIVE_LEAD_STATUSES),
         "leads_by_status": counts,
@@ -358,10 +369,16 @@ def start_campaign(db: Session, call: Call, campaign_id: int, data: schemas.Star
     if problems:
         raise ApiError(409, "not_ready", "Kampagne kann nicht gestartet werden", problems)
     old = c.status
+    old_reason = c.wait_reason
     c.status = "active"
-    pipeline.log_event(db, "campaign_status", f"{c.name} -> active (API)", c.tenant_id)
-    call.detail = f"{old} -> active"
-    return {"confirmed": True, "campaign": campaign_dict(db, c), "previous_status": old}
+    c.wait_reason = None
+    released = []
+    if old == "waiting" and c.auto_approve:
+        # drafts written before the campaign was parked: auto_approve applies now
+        released = _approve(db, _drafts(db, c))
+    pipeline.log_event(db, "campaign_status", f"{c.name} -> active (API)" + (f", war wartend: {old_reason}" if old == "waiting" else ""), c.tenant_id)
+    call.detail = f"{old} -> active" + (f"; {len(released)} Entwürfe freigegeben (auto_approve)" if released else "")
+    return {"confirmed": True, "campaign": campaign_dict(db, c), "previous_status": old, "drafts_released": len(released)}
 
 
 def _set_status(db: Session, call: Call, campaign_id: int, data: schemas.Confirm, new: str) -> dict:
@@ -377,6 +394,7 @@ def _set_status(db: Session, call: Call, campaign_id: int, data: schemas.Confirm
         return _preview(preview)
     old = c.status
     c.status = new
+    c.wait_reason = None
     pipeline.log_event(db, "campaign_status", f"{c.name} -> {new} (API)", c.tenant_id)
     call.detail = f"{old} -> {new}"
     return {"confirmed": True, "campaign": campaign_dict(db, c), "previous_status": old}
@@ -388,6 +406,88 @@ def pause_campaign(db: Session, call: Call, campaign_id: int, data: schemas.Conf
 
 def stop_campaign(db: Session, call: Call, campaign_id: int, data: schemas.Confirm) -> dict:
     return _set_status(db, call, campaign_id, data, "done")
+
+
+def wait_campaign(db: Session, call: Call, campaign_id: int, data: schemas.WaitCampaign) -> dict:
+    """Park a campaign until a condition is met. Released with start_campaign."""
+    c = _campaign(db, call, campaign_id)
+    if c.status == "done":
+        raise ApiError(409, "campaign_done", "Abgeschlossene Kampagnen können nicht auf wartend gesetzt werden")
+    counts = _lead_counts(db, c.id)
+    hidden = len(_drafts(db, c, include_waiting=True))
+    preview = {
+        "campaign": campaign_dict(db, c),
+        "status": {"from": c.status, "to": "waiting"},
+        "wait_reason": {"old": c.wait_reason, "new": data.reason},
+        "leads_pending": sum(n for s, n in counts.items() if s in ACTIVE_LEAD_STATUSES),
+        "drafts_hidden_from_review": hidden,
+        "effect": "Kein Sourcing, keine neuen Entwürfe, kein Versand. Entwürfe verschwinden aus der Freigabe und können nicht freigegeben werden. Wieder aktiv mit start_campaign.",
+    }
+    if not data.confirm:
+        return _preview(preview)
+    old = c.status
+    c.status = "waiting"
+    c.wait_reason = data.reason
+    pipeline.log_event(db, "campaign_status", f"{c.name} -> waiting: {data.reason} (API)", c.tenant_id)
+    call.detail = f"{old} -> waiting: {data.reason}"[:2000]
+    return {"confirmed": True, "campaign": campaign_dict(db, c), "previous_status": old, "drafts_hidden_from_review": hidden}
+
+
+def _selected_leads(db: Session, c: Campaign, data) -> list[Lead]:
+    q = db.query(Lead).filter(Lead.campaign_id == c.id, Lead.deleted_at.is_(None))
+    if data.lead_ids:
+        lead_ids = list(dict.fromkeys(data.lead_ids))
+        rows = q.filter(Lead.id.in_(lead_ids)).all()
+        if len(rows) != len(lead_ids):
+            # same answer for foreign, deleted and unknown leads
+            raise not_found("Lead")
+        return sorted(rows, key=lambda l: l.id)
+    return q.order_by(Lead.id).all()
+
+
+def wait_leads(db: Session, call: Call, campaign_id: int, data: schemas.WaitLeads) -> dict:
+    """Park leads until a condition is met: nothing is drafted or sent for them, their
+    drafts are hidden from the review queue. Released with release_leads."""
+    c = _campaign(db, call, campaign_id)
+    leads = _selected_leads(db, c, data)
+    eligible = [l for l in leads if l.status in pipeline.WAITABLE_LEAD_STATUSES or l.status == "waiting"]
+    skipped = [{"lead_id": l.id, "status": l.status} for l in leads if l not in eligible]
+    if data.lead_ids is None:
+        skipped = []  # all=true: only report what changes
+    preview = {
+        "campaign_id": c.id,
+        "reason": data.reason,
+        "would_park": [{"lead_id": l.id, "firma": l.company, "status": l.status} for l in eligible],
+        "not_parkable": skipped,
+    }
+    if not data.confirm:
+        return _preview(preview)
+    for l in eligible:
+        pipeline.set_lead_waiting(db, l, data.reason)
+    call.ids["lead_ids"] = [l.id for l in eligible]
+    call.detail = f"{len(eligible)} wartend: {data.reason}"[:2000]
+    return {"confirmed": True, "parked": [l.id for l in eligible], "not_parkable": skipped}
+
+
+def release_leads(db: Session, call: Call, campaign_id: int, data: schemas.ReleaseLeads) -> dict:
+    """Put parked leads back into their previous status. Drafts still need approval
+    (auto_approve=false); already approved mails go out in the next send window."""
+    c = _campaign(db, call, campaign_id)
+    leads = [l for l in _selected_leads(db, c, data) if l.status == "waiting"]
+    preview = {
+        "campaign_id": c.id,
+        "would_release": [{"lead_id": l.id, "firma": l.company, "wait_reason": l.wait_reason, "status_after": l.wait_prev_status} for l in leads],
+        "approved_mails_sent_next_window": sum(
+            1 for l in leads for m in l.messages if m.direction == "out" and m.status == "approved"
+        ) if c.status == "active" else 0,
+        "note": "Entwürfe brauchen weiterhin die Freigabe, sofern auto_approve=false" + ("; Kampagne ist selbst wartend, Versand erst nach start_campaign" if c.status == "waiting" else ""),
+    }
+    if not data.confirm:
+        return _preview(preview)
+    done = {l.id: pipeline.release_lead(db, l) for l in leads}
+    call.ids["lead_ids"] = list(done)
+    call.detail = f"{len(done)} nicht mehr wartend"
+    return {"confirmed": True, "released": [{"lead_id": k, "status": v} for k, v in done.items()]}
 
 
 def set_sequence(db: Session, call: Call, campaign_id: int, data: schemas.SequenceSet) -> dict:
@@ -512,7 +612,10 @@ def update_lead(db: Session, call: Call, lead_id: int, data: schemas.LeadUpdate)
         lead.domain = None if _generic_domain(domain) else domain
         lead.email_source = "import"
         lead.email_mx_ok = None
-        lead.status = "new"
+        if lead.status == "waiting":
+            lead.wait_prev_status = "new"  # stays parked, re-verified after release
+        else:
+            lead.status = "new"
         lead.next_send_at = None
     call.detail = "geändert: " + ", ".join(changes)
     return {"confirmed": True, "lead": lead_dict(lead), "pending_mails_discarded": preview["pending_mails_discarded"]}
@@ -685,12 +788,18 @@ def set_tenant_signature(db: Session, call: Call, data: schemas.TenantSignatureS
 CAMPAIGN_FIELDS = {"name": "name", "sender_name": "from_name", "sender_email": "from_email", "reply_to": "reply_to", "auto_approve": "auto_approve"}
 
 
-def _drafts(db: Session, c: Campaign, status: str = "draft", lead_ids: list[int] | None = None) -> list[Message]:
+def _drafts(db: Session, c: Campaign, status: str = "draft", lead_ids: list[int] | None = None, include_waiting: bool = False) -> list[Message]:
+    """Unsent mails of a campaign. Without include_waiting, nothing of a waiting campaign
+    and nothing of waiting leads (they are parked and must not be approved)."""
+    if c.status == "waiting" and not include_waiting:
+        return []
     q = (
         db.query(Message)
         .join(Lead)
         .filter(Lead.campaign_id == c.id, Lead.deleted_at.is_(None), Message.direction == "out", Message.status == status)
     )
+    if not include_waiting:
+        q = q.filter(Lead.status != "waiting")
     if lead_ids is not None:
         q = q.filter(Message.lead_id.in_(lead_ids))
     return q.order_by(Message.id).all()
@@ -735,16 +844,19 @@ def update_campaign(db: Session, call: Call, campaign_id: int, data: schemas.Cam
     return {"confirmed": True, "campaign": campaign_dict(db, c, full=True), "drafts_released": len(released)}
 
 
-def list_drafts(db: Session, call: Call, campaign_id: int, status: str = "draft") -> dict:
+def list_drafts(db: Session, call: Call, campaign_id: int, status: str = "draft", include_waiting: bool = False) -> dict:
     c = _campaign(db, call, campaign_id)
     if status not in ("draft", "approved"):
         raise ApiError(422, "validation_error", "status: draft oder approved")
-    drafts = _drafts(db, c, status)
-    return {"campaign_id": c.id, "status": status, "total": len(drafts), "drafts": [_draft_dict(m, c) for m in drafts]}
+    drafts = _drafts(db, c, status, include_waiting=include_waiting)
+    parked = len(_drafts(db, c, status, include_waiting=True)) - len(_drafts(db, c, status))
+    return {"campaign_id": c.id, "status": status, "total": len(drafts), "parked_waiting": parked, "drafts": [_draft_dict(m, c) for m in drafts]}
 
 
 def approve_drafts(db: Session, call: Call, campaign_id: int, data: schemas.ApproveDrafts) -> dict:
     c = _campaign(db, call, campaign_id)
+    if c.status == "waiting":
+        raise ApiError(409, "campaign_waiting", f"Kampagne ist wartend ({c.wait_reason or 'ohne Grund'}), zuerst mit start_campaign freigeben")
     lead_ids = None
     if data.lead_ids:
         lead_ids = list(dict.fromkeys(data.lead_ids))
@@ -753,11 +865,13 @@ def approve_drafts(db: Session, call: Call, campaign_id: int, data: schemas.Appr
             # same answer for foreign, deleted and unknown leads
             raise not_found("Lead")
     drafts = _drafts(db, c, "draft", lead_ids)
-    without = sorted(set(lead_ids or []) - {m.lead_id for m in drafts})
+    waiting = sorted({m.lead_id for m in _drafts(db, c, "draft", lead_ids, include_waiting=True)} - {m.lead_id for m in drafts})
+    without = sorted(set(lead_ids or []) - {m.lead_id for m in drafts} - set(waiting))
     preview = {
         "campaign_id": c.id,
         "would_approve": [{"draft_id": m.id, "lead_id": m.lead_id, "email": m.lead.email, "step": m.step + 1, "subject": m.subject} for m in drafts],
         "leads_without_draft": without,
+        "leads_waiting": waiting,
     }
     if not data.confirm:
         return _preview(preview)
@@ -765,8 +879,8 @@ def approve_drafts(db: Session, call: Call, campaign_id: int, data: schemas.Appr
     pipeline.log_event(db, "api_drafts_approved", f"{c.name}: {len(approved)} Entwürfe", c.tenant_id)
     call.ids["draft_ids"] = approved
     call.ids["lead_ids"] = [m.lead_id for m in drafts]
-    call.detail = f"{len(approved)} freigegeben"
-    return {"confirmed": True, "approved": approved, "leads_without_draft": without}
+    call.detail = f"{len(approved)} freigegeben" + (f", {len(waiting)} wartend übersprungen" if waiting else "")
+    return {"confirmed": True, "approved": approved, "leads_without_draft": without, "leads_waiting": waiting}
 
 
 def reject_draft(db: Session, call: Call, draft_id: int, data: schemas.Confirm) -> dict:
