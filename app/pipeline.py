@@ -170,7 +170,7 @@ def run_sourcing(db: Session, campaign: Campaign) -> str:
                 company=hit.name[:200],
                 address=hit.address,
                 phone=phone,
-                website=website,
+                website=crawler.safe_website(website),
                 domain=crawler.domain_of(website),
                 place_types=",".join(hit.types)[:300],
                 source_query=query[:200],
@@ -643,6 +643,15 @@ def handle_webhook(db: Session, tenant: Tenant, payload: dict) -> str:
     target = rcpt or (lead.email if lead else None)
     reason = smtp2go.SUPPRESS_EVENTS.get(event or "")
     if reason and target:
+        # only addresses this tenant has actually mailed may be suppressed: whoever knows the
+        # webhook URL must not be able to block arbitrary addresses
+        target = target.lower().strip()
+        known = (lead is not None and (lead.email or "").lower() == target) or (
+            db.query(Lead.id).filter(Lead.tenant_id == tenant.id, Lead.email == target, Lead.last_sent_at.isnot(None)).first() is not None
+        )
+        if not known:
+            log_event(db, "webhook_ignored", f"{event}: {target} ist kein angeschriebener Lead ({email_id or message_id or '-'})", tenant.id)
+            return "ignored"
         suppress(db, tenant.id, target, reason)
         if reason == "unsubscribe" and lead is not None and lead.unsubscribe_source is None:
             lead.unsubscribe_source = "webhook"

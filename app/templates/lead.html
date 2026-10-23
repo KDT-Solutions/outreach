@@ -7,7 +7,7 @@
 <tr><th>Kampagne</th><td><a href="/campaigns/{{ lead.campaign.id }}">{{ lead.campaign.name }}</a> ({{ lead.campaign.tenant.name }})</td></tr>
 <tr><th>Adresse</th><td>{{ lead.address or '–' }}</td></tr>
 <tr><th>Telefon</th><td>{{ lead.phone or '–' }}</td></tr>
-<tr><th>Webseite</th><td>{% if lead.website %}<a href="{{ lead.website }}" target="_blank" rel="noopener">{{ lead.website }}</a>{% else %}–{% endif %}</td></tr>
+<tr><th>Webseite</th><td>{% if lead.website and lead.website.lower().startswith(('http://', 'https://')) %}<a href="{{ lead.website }}" target="_blank" rel="noopener">{{ lead.website }}</a>{% elif lead.website %}{{ lead.website }}{% else %}–{% endif %}</td></tr>
 <tr><th>E-Mail</th><td>{{ lead.email or '–' }} {% if lead.email_source %}<span class="badge">{{ lead.email_source }}</span>{% endif %} {% if lead.email_mx_ok %}<span class="badge ok">MX ok</span>{% elif lead.email %}<span class="badge bad">kein MX</span>{% endif %}</td></tr>
 <tr><th>Ansprechperson</th><td>{{ lead.contact_name or '–' }}{% if lead.salutation %} <span class="muted small">({{ lead.salutation }})</span>{% endif %}</td></tr>
 <tr><th>Google-Typen</th><td class="small">{{ lead.place_types or '–' }}</td></tr>

@@ -37,7 +37,21 @@ Generate the secrets:
 ```
 openssl rand -hex 32                                                   # SECRET_KEY, API_TOKEN
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"   # DATA_ENCRYPTION_KEY
+python -m app.tools hash-password                                      # ADMIN_PASSWORD_HASH_B64 (argon2)
+python -m app.tools totp-secret                                        # ADMIN_TOTP_SECRET (optional second factor)
 ```
+
+Admin login: set `ADMIN_PASSWORD_HASH_B64` (argon2 hash, base64-wrapped so the `$` survives `.env`
+and Compose). A plain `ADMIN_PASSWORD` still works as a fallback but is logged as a warning at
+start-up; with both set, the hash wins. `ADMIN_TOTP_SECRET` adds a second step with a one-time
+code (any authenticator app, the `otpauth` URI is printed by `totp-secret`). Failed logins lock the
+account with a growing delay (5 failures, 60 s doubling up to 15 min), independent of the client
+address; on top of that 8 failures per IP and 15 minutes. Only the `app` container needs the admin
+variables.
+
+Behind the reverse proxy uvicorn trusts `X-Forwarded-For`/`-Proto` only from `FORWARDED_ALLOW_IPS`
+(default: loopback and the private ranges). Set it to the proxy's address; never `*`, or every
+client could pick its own address for the login limiter, the audit log and the API IP allowlist.
 
 ### External services
 
@@ -119,15 +133,23 @@ Die ältere JSON-API unter `/api/...` (Abschnitt oben, `API_TOKEN`) bleibt unver
    leer = keiner). Zugriffe auf andere Mandanten liefern 404.
 3. Optional: `OUTREACH_API_ALLOW_IPS` (IPs oder CIDRs, kommagetrennt, leer = alle),
    `OUTREACH_API_RATE_LIMIT` (Anfragen pro Minute und Token, Standard 60),
-   `OUTREACH_TEST_ALLOW_DOMAINS` (Domains, an die `send_test` senden darf; leer = `send_test` gesperrt).
+   `OUTREACH_TEST_ALLOW_DOMAINS` (Domains, an die `send_test` senden darf; leer = `send_test` gesperrt),
+   `OUTREACH_SENDER_DOMAINS` (zusätzliche Domains für Absender/Reply-To von Kampagnen; die Domains der
+   Mandantenadressen `from_email`/`reply_to` sind immer erlaubt, alles andere lehnt `create_campaign`/
+   `update_campaign` mit `sender_not_allowed` ab),
+   `OUTREACH_ALLOW_AUTO_APPROVE` (`true` erlaubt `auto_approve=true` über API und MCP; Standard `false`,
+   dann antwortet der Dienst mit `403 auto_approve_disabled` und Entwürfe brauchen die Freigabe in der
+   Oberfläche oder per `approve_drafts`).
 4. `docker compose up -d outreach-mcp`. Der Dienst lauscht auf `MCP_HOST_PORT` (Standard 8430,
    gebunden an `BIND_ADDR`) und startet nicht, wenn der Token fehlt oder zu kurz ist.
 5. Reverse Proxy (z.B. Nginx Proxy Manager) für `outreach.example.com`: SSL erzwingen, Custom
    Locations `/api/v1` und `/mcp` auf `<host>:8430` zeigen lassen; alles andere geht weiter an `app`.
    Der Dienst lehnt Anfragen ab, die nicht über HTTPS kamen (`X-Forwarded-Proto`), und nimmt auf `/mcp`
    nur den Host aus `PUBLIC_BASE_URL` an (abweichend: `OUTREACH_MCP_ALLOWED_HOSTS`).
-6. Mit IP-Allowlist zusätzlich `MCP_FORWARDED_ALLOW_IPS` auf die IP des Proxys setzen, damit nur
-   der Proxy die Client-IP (`X-Forwarded-For`) setzen darf.
+6. `MCP_FORWARDED_ALLOW_IPS` auf die IP des Proxys setzen (Standard: Loopback und private Netze),
+   damit nur der Proxy die Client-IP (`X-Forwarded-For`) und das Schema (`X-Forwarded-Proto`) setzen
+   darf. Nie `*`: dann könnte jeder, der den Port erreicht, IP-Allowlist, Fehlversuchs-Limit und
+   HTTPS-Prüfung mit eigenen Headern umgehen.
 
 Jeder Aufruf braucht `Authorization: Bearer <token>`. Ohne gültigen Token kommt `401` ohne Details.
 Fehler sind immer JSON:
@@ -184,7 +206,10 @@ Regeln:
   der Sperrliste) werden unter `skipped` gemeldet und nicht angelegt. Ungültige Zeilen lehnen den ganzen
   Import ab. Importierte Leads bekommen vor dem Versand eine MX-Prüfung durch den Worker.
 - `auto_approve` beim Anlegen der Kampagne entscheidet, ob gerenderte Mails ohne Freigabe in der
-  Oberfläche gesendet werden (Standard: nein).
+  Oberfläche gesendet werden (Standard: nein). Über API/MCP lässt es sich nur setzen, wenn
+  `OUTREACH_ALLOW_AUTO_APPROVE=true` ist; in der Oberfläche bleibt es immer möglich.
+- `sender_email` und `reply_to` müssen auf einer Domain des Mandanten (`from_email`, `reply_to`) oder
+  aus `OUTREACH_SENDER_DOMAINS` liegen.
 - Antworten in `get_stats` stammen aus dem Zammad-Abgleich des Workers (`replies_source.last_poll`).
 
 ### Leads finden: search_leads und enrich_leads
@@ -269,7 +294,8 @@ zusammengezählt in `get_stats` unter `unsubscribe_reasons`.
   gehen im nächsten Sendefenster raus, sofern die Kampagne aktiv ist.
 - `reject_draft` verwirft einen Entwurf; der Lead wird auf `skipped` gesetzt.
 - `update_campaign` ändert Name, Absender, Reply-To und `auto_approve`. Wird `auto_approve` auf
-  `true` gesetzt, werden alle wartenden Entwürfe sofort mit freigegeben; die Vorschau listet sie auf.
+  `true` gesetzt (nur mit `OUTREACH_ALLOW_AUTO_APPROVE=true`), werden alle wartenden Entwürfe sofort
+  mit freigegeben; die Vorschau listet sie auf.
 
 ### Wartend (Kampagnen und Leads)
 
@@ -371,13 +397,24 @@ python -m pytest -q
 
 ## Security notes
 
-- Single admin login; signed, `HttpOnly`, `SameSite=Strict` session cookie; CSRF token
-  on every form; login attempts rate-limited per IP.
+- Single admin login with argon2 password hash and optional TOTP; signed, `HttpOnly`,
+  `SameSite=Strict` session cookie; CSRF token on every form (logout included); account
+  lock-out with back-off per user name plus a per-IP limit; `X-Forwarded-*` only from
+  `FORWARDED_ALLOW_IPS`.
 - Tenant secrets (SMTP2GO, Zammad) are encrypted at rest with
   `DATA_ENCRYPTION_KEY`.
 - Webhook URLs carry a per-tenant random token; unsubscribe links a per-lead token.
-- The crawler fetches only the lead's own website (same host), max ~1.5 MB per page,
-  four contact pages at most.
+- The crawler fetches only the lead's own website (same host), max 2 MB per page
+  (`CRAWL_MAX_BYTES`), `text/html` only, four contact pages at most. Lead websites come from
+  third parties (Google Places, API), so every URL and every redirect hop (max 3) is checked
+  before the request: http/https on ports 80/443 only, the host is resolved and must point
+  to a public address (no loopback, RFC 1918, link-local/metadata, multicast, ULA), and the
+  connection is pinned to the checked IP with the Host header/SNI set. Lead websites are
+  stored and linked only with an `http(s)://` scheme.
+- Webhooks suppress only addresses the tenant has actually mailed; the Hunter key travels in
+  the `X-API-KEY` header, not in the URL.
+- API campaigns: sender/reply-to limited to the tenant's domains (`OUTREACH_SENDER_DOMAINS`),
+  `auto_approve` only with `OUTREACH_ALLOW_AUTO_APPROVE=true`.
 - No outbound mail leaves the system without an approved message, an address that
   passed the MX check, and a clear suppression list.
 

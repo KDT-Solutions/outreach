@@ -18,7 +18,7 @@
   <a href="/suppressions" class="{{ 'active' if request.url.path.startswith('/suppressions') }}">Sperrliste</a>
   <a href="/events" class="{{ 'active' if request.url.path.startswith('/events') }}">Protokoll</a>
   <button type="button" id="theme-toggle" class="secondary small theme-toggle">Auto</button>
-  <form method="post" action="/logout"><button class="secondary small">Abmelden</button></form>
+  <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary small">Abmelden</button></form>
 </nav>
 <main>
 {% block content %}{% endblock %}

@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Outreach – Code</title><link rel="stylesheet" href="/static/style.css"><script src="/static/theme.js"></script></head>
+<body><main><div class="card login">
+<h1>Outreach</h1>
+<p class="muted">Code aus der Authenticator-App</p>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" action="/login/totp">
+<label>Code</label><input name="totp" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" required autofocus>
+<div class="actions"><button>Bestätigen</button></div>
+</form>
+<p class="muted"><a href="/login">Zurück</a></p>
+</div></main></body></html>

@@ -8,7 +8,7 @@
 {% for m in drafts %}
 <div class="card draft">
 <p><b><a href="/leads/{{ m.lead.id }}">{{ m.lead.company }}</a></b> · {{ m.lead.email }} · {{ m.lead.campaign.name }} · Schritt {{ m.step + 1 }}
-{% if m.lead.website %}· <a href="{{ m.lead.website }}" target="_blank" rel="noopener">Webseite</a>{% endif %}
+{% if m.lead.website and m.lead.website.lower().startswith(('http://', 'https://')) %}· <a href="{{ m.lead.website }}" target="_blank" rel="noopener">Webseite</a>{% endif %}
 {% if m.lead.contact_name %}· {{ m.lead.contact_name }}{% endif %}</p>
 <form method="post" action="/messages/{{ m.id }}/decide"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="back" value="/review{% if tenant %}?tenant={{ tenant }}{% endif %}">
 <label>Betreff</label><input type="text" name="subject" value="{{ m.subject }}">

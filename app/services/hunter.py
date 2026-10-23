@@ -18,7 +18,8 @@ def domain_search(domain: str) -> list[dict]:
     if not key or not domain:
         return []
     with httpx.Client(timeout=20) as client:
-        r = client.get(f"{BASE}/domain-search", params={"domain": domain, "limit": 5, "api_key": key})
+        # key in the header, not in the URL (query strings end up in proxy and server logs)
+        r = client.get(f"{BASE}/domain-search", params={"domain": domain, "limit": 5}, headers={"X-API-KEY": key})
         if r.status_code != 200:
             log.warning("Hunter domain-search %s: %s", r.status_code, r.text[:200])
             return []

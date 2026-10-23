@@ -214,7 +214,7 @@ def _store(db: Session, c: Campaign, prospects: list[Prospect], rows: list[dict]
         domain = crawler.domain_of(p.website)
         lead = Lead(
             tenant_id=c.tenant_id, campaign_id=c.id, place_id=p.place_id, company=p.firma[:200], city=p.ort, address=p.address,
-            phone=p.phone, website=p.website, domain=domain, place_types=",".join(p.types)[:300] or None,
+            phone=p.phone, website=crawler.safe_website(p.website), domain=domain, place_types=",".join(p.types)[:300] or None,
             source_query=source_query[:200], language=language, email=p.email, email_source=p.source, email_mx_ok=p.mx_ok,
             email_candidates=",".join(p.candidates) or None, site_excerpt=p.site_excerpt, impressum_excerpt=p.impressum_excerpt,
             team_excerpt=p.team_excerpt,

@@ -12,8 +12,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import crypto, pipeline
-from ..auth import COOKIE, check_login, create_session, require_csrf, require_login
+from .. import auth, crypto, pipeline
+from ..auth import COOKIE, require_csrf, require_login
 from ..config import get_settings
 from ..db import get_db
 from ..models import LEAD_STATUSES, Campaign, Event, Lead, Message, Suppression, Tenant, TenantSignature
@@ -25,9 +25,9 @@ templates.env.globals["lead_statuses"] = LEAD_STATUSES
 templates.env.globals["split_quote"] = mailtext.split_quote
 
 
-def render(request: Request, name: str, sess: dict | None = None, **ctx):
+def render(request: Request, name: str, sess: dict | None = None, status_code: int = 200, headers: dict | None = None, **ctx):
     ctx.update({"request": request, "csrf": (sess or {}).get("csrf", ""), "settings": get_settings()})
-    return templates.TemplateResponse(request, name, ctx)
+    return templates.TemplateResponse(request, name, ctx, status_code=status_code, headers=headers)
 
 
 def _audit(db: Session, request: Request, sess: dict, tool: str, tenant_id: int | None, ids: dict, detail: str = "") -> None:
@@ -45,19 +45,62 @@ def login_form(request: Request):
     return render(request, "login.html", error=None)
 
 
-@router.post("/login")
-def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    ip = request.client.host if request.client else "?"
-    if not check_login(username, password, ip):
-        return render(request, "login.html", error="Login fehlgeschlagen")
+def _secure() -> bool:
+    return get_settings().public_base_url.startswith("https://")
+
+
+def _lock_message(seconds: int) -> str:
+    if seconds <= 0:
+        return "Zu viele Fehlversuche. Bitte später erneut versuchen."
+    return f"Zu viele Fehlversuche. Anmeldung für {seconds} Sekunden gesperrt."
+
+
+def _login_error(request: Request, template: str, username: str, fallback: str):
+    wait = auth.locked_for(username)
+    headers = {"Retry-After": str(wait)} if wait else None
+    return render(request, template, error=_lock_message(wait) if wait else fallback, status_code=429 if wait else 401, headers=headers)
+
+
+def _finish_login() -> RedirectResponse:
     resp = _redirect("/")
-    secure = get_settings().public_base_url.startswith("https://")
-    resp.set_cookie(COOKIE, create_session(), httponly=True, samesite="strict", secure=secure, max_age=12 * 3600)
+    resp.set_cookie(COOKIE, auth.create_session(), httponly=True, samesite="strict", secure=_secure(), max_age=auth.SESSION_MAX_AGE)
+    resp.delete_cookie(auth.PRE_COOKIE)
     return resp
 
 
+@router.post("/login")
+def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    ip = request.client.host if request.client else "?"
+    if not auth.check_password(username, password, ip):
+        return _login_error(request, "login.html", username, "Login fehlgeschlagen")
+    if not auth.totp_required():
+        return _finish_login()
+    # second step: one-time code
+    resp = _redirect("/login/totp")
+    resp.set_cookie(auth.PRE_COOKIE, auth.create_pre_session(), httponly=True, samesite="strict", secure=_secure(), max_age=auth.PRE_MAX_AGE)
+    return resp
+
+
+@router.get("/login/totp", response_class=HTMLResponse)
+def login_totp_form(request: Request):
+    if not auth.read_pre_session(request):
+        return _redirect("/login")
+    return render(request, "login_totp.html", error=None)
+
+
+@router.post("/login/totp")
+def login_totp(request: Request, totp: str = Form("")):
+    ip = request.client.host if request.client else "?"
+    pre = auth.read_pre_session(request)
+    if not pre:
+        return _redirect("/login")
+    if not auth.check_totp(pre["u"], totp, ip):
+        return _login_error(request, "login_totp.html", pre["u"], "Code ungültig")
+    return _finish_login()
+
+
 @router.post("/logout")
-def logout():
+def logout(sess: dict = Depends(require_csrf)):
     resp = _redirect("/login")
     resp.delete_cookie(COOKIE)
     return resp
@@ -392,7 +435,7 @@ async def message_decide(message_id: int, request: Request, sess: dict = Depends
     if not m or m.direction != "out":
         raise HTTPException(404)
     decision = f.get("decision")
-    back = f.get("back") or "/review"
+    back = auth.safe_next(f.get("back"), "/review")
     if decision in ("approve", "regenerate", "discard"):
         _audit(db, request, sess, f"ui_draft_{decision}", m.tenant_id,
                {"draft_id": m.id, "lead_id": m.lead_id, "campaign_id": m.lead.campaign_id}, f"Schritt {m.step + 1} an {m.lead.email}")

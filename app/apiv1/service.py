@@ -306,8 +306,36 @@ def get_stats(db: Session, call: Call, campaign_id: int) -> dict:
 
 
 # ---------------------------------------------------------------- campaigns
+def allowed_sender_domains(tenant: Tenant) -> set[str]:
+    """Domains a campaign may send from or reply to: the tenant's own from/reply-to domains
+    plus OUTREACH_SENDER_DOMAINS. A leaked token must not turn the service into an open relay."""
+    domains = {d.strip().lower() for d in get_settings().outreach_sender_domains.split(",") if d.strip()}
+    for addr in (tenant.from_email, tenant.reply_to):
+        if addr and "@" in addr:
+            domains.add(addr.rsplit("@", 1)[1].lower())
+    return domains
+
+
+def _check_sender(tenant: Tenant, **addresses: str | None) -> None:
+    allowed = allowed_sender_domains(tenant)
+    bad = [
+        {"loc": [field], "msg": f"Domain nicht erlaubt; erlaubt: {', '.join(sorted(allowed)) or '-'}"}
+        for field, addr in addresses.items()
+        if addr and addr.rsplit("@", 1)[-1].lower() not in allowed
+    ]
+    if bad:
+        raise ApiError(422, "sender_not_allowed", "Absender- oder Antwortadresse liegt nicht auf einer erlaubten Domain", bad)
+
+
+def _check_auto_approve(value: bool | None) -> None:
+    if value and not get_settings().outreach_allow_auto_approve:
+        raise ApiError(403, "auto_approve_disabled", "auto_approve ist über die API gesperrt (OUTREACH_ALLOW_AUTO_APPROVE); Entwürfe in der Oberfläche freigeben")
+
+
 def create_campaign(db: Session, call: Call, data: schemas.CampaignCreate) -> dict:
     tenant = _tenant(db, call, data.tenant)
+    _check_sender(tenant, sender_email=data.sender_email, reply_to=data.reply_to)
+    _check_auto_approve(data.auto_approve)
     values = {
         "tenant": tenant.slug, "name": data.name, "sender_name": data.sender_name, "sender_email": data.sender_email,
         "reply_to": data.reply_to, "language": data.language, "auto_approve": data.auto_approve, "status": "draft",
@@ -825,6 +853,8 @@ def _approve(db: Session, msgs: list[Message]) -> list[int]:
 def update_campaign(db: Session, call: Call, campaign_id: int, data: schemas.CampaignUpdate) -> dict:
     c = _campaign(db, call, campaign_id)
     changes = {k: v for k, v in data.changes().items() if getattr(c, CAMPAIGN_FIELDS[k]) != v}
+    _check_sender(c.tenant, sender_email=changes.get("sender_email"), reply_to=changes.get("reply_to"))
+    _check_auto_approve(changes.get("auto_approve"))
     drafts = _drafts(db, c) if changes.get("auto_approve") is True else []
     preview = {
         "campaign_id": c.id,

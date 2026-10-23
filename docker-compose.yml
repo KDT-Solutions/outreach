@@ -12,7 +12,10 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - DATA_ENCRYPTION_KEY=${DATA_ENCRYPTION_KEY}
       - ADMIN_USER=${ADMIN_USER:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      # argon2 hash (python -m app.tools hash-password); ADMIN_PASSWORD in plain text only as fallback
+      - ADMIN_PASSWORD_HASH_B64=${ADMIN_PASSWORD_HASH_B64:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - ADMIN_TOTP_SECRET=${ADMIN_TOTP_SECRET:-}
       - API_TOKEN=${API_TOKEN}
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
@@ -22,6 +25,8 @@ services:
       - SMTP2GO_API_KEY=${SMTP2GO_API_KEY:-}
       - WEBHOOK_TOKEN=${WEBHOOK_TOKEN:-}
       - TZ=${TZ:-Europe/Zurich}
+      # which proxies may set X-Forwarded-For/-Proto (login limiter, audit log); never "*"
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${HOST_PORT:-8429}:8000"
 
@@ -45,8 +50,6 @@ services:
       - DATABASE_URL=postgresql+psycopg://outreach:${POSTGRES_PASSWORD}@db:5432/outreach
       - SECRET_KEY=${SECRET_KEY}
       - DATA_ENCRYPTION_KEY=${DATA_ENCRYPTION_KEY}
-      - ADMIN_USER=${ADMIN_USER:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - API_TOKEN=${API_TOKEN}
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
@@ -72,7 +75,6 @@ services:
       - DATABASE_URL=postgresql+psycopg://outreach:${POSTGRES_PASSWORD}@db:5432/outreach
       - SECRET_KEY=${SECRET_KEY}
       - DATA_ENCRYPTION_KEY=${DATA_ENCRYPTION_KEY}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - SMTP2GO_API_KEY=${SMTP2GO_API_KEY:-}
@@ -84,8 +86,12 @@ services:
       - OUTREACH_API_RATE_LIMIT=${OUTREACH_API_RATE_LIMIT:-60}
       - OUTREACH_TEST_ALLOW_DOMAINS=${OUTREACH_TEST_ALLOW_DOMAINS:-}
       - OUTREACH_MCP_ALLOWED_HOSTS=${OUTREACH_MCP_ALLOWED_HOSTS:-}
-      # which proxies may set X-Forwarded-For/-Proto; use the proxy's IP when the IP allowlist is on
-      - FORWARDED_ALLOW_IPS=${MCP_FORWARDED_ALLOW_IPS:-*}
+      # extra sender domains for create_campaign/update_campaign (tenant domains are always allowed)
+      - OUTREACH_SENDER_DOMAINS=${OUTREACH_SENDER_DOMAINS:-}
+      # auto_approve via API/MCP only when explicitly allowed
+      - OUTREACH_ALLOW_AUTO_APPROVE=${OUTREACH_ALLOW_AUTO_APPROVE:-false}
+      # which proxies may set X-Forwarded-For/-Proto (IP allowlist, limiter, HTTPS check); never "*"
+      - FORWARDED_ALLOW_IPS=${MCP_FORWARDED_ALLOW_IPS:-127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${MCP_HOST_PORT:-8430}:8000"
 

@@ -6,10 +6,12 @@ finds a usable mailbox for most SMEs without any paid data source.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
+import socket
 from dataclasses import dataclass, field
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse, urlunparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -38,6 +40,16 @@ OBFUSCATED_RE = re.compile(
     re.I,
 )
 SKIP_EMAIL_SUFFIX = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js")
+# SSRF guard: the crawler only ever talks to public web servers on the standard ports.
+# Lead websites come from Google Places and the API, i.e. from third parties.
+ALLOWED_SCHEMES = ("http", "https")
+ALLOWED_PORTS = {80, 443}
+MAX_REDIRECTS = 3
+HTML_TYPES = ("text/html", "application/xhtml+xml")
+
+
+class UnsafeURL(ValueError):
+    """URL points somewhere the crawler must not go (private network, odd scheme or port)."""
 SKIP_EMAIL_PARTS = ("example.", "sentry", "wixpress", "wordpress", "domain.", "email.com", "noreply", "no-reply", "@2x", "u003e")
 GENERIC_LOCALPARTS = ("info", "kontakt", "contact", "office", "mail", "hello", "hallo", "welcome", "admin", "sekretariat", "empfang", "praxis", "shop", "verkauf", "sales", "support")
 
@@ -65,6 +77,88 @@ def domain_of(url: str | None) -> str | None:
     if host.startswith("www."):
         host = host[4:]
     return host or None
+
+
+def safe_website(url: str | None) -> str | None:
+    """A lead website that may be stored and rendered as a link: http(s) with a host name,
+    nothing else (no javascript:, data:, file: ...). None when it does not qualify."""
+    if not url:
+        return None
+    url = url.strip()
+    if not re.match(r"^https?://", url, re.I):
+        return None
+    try:
+        parts = urlparse(url)
+    except ValueError:
+        return None
+    if not parts.hostname or parts.username or parts.password:
+        return None
+    return url[:300]
+
+
+# ---------------------------------------------------------------- SSRF guard
+def _resolve(host: str) -> list[str]:
+    """All addresses a host name resolves to (IPv4 and IPv6). Tests patch this."""
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise UnsafeURL(f"{host}: nicht auflösbar ({exc.strerror or exc})") from None
+    return sorted({info[4][0] for info in infos})
+
+
+def _is_public(addr: str) -> bool:
+    ip = ipaddress.ip_address(addr)
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_global and not ip.is_multicast and not ip.is_reserved
+
+
+def check_url(url: str) -> tuple[str, int, str]:
+    """Validate scheme, port and host of a URL and resolve the host.
+
+    Returns (host, port, ip): the address the request must be pinned to. Raises UnsafeURL for
+    anything but http/https on 80/443 to a public address: loopback, RFC1918, link-local
+    (169.254.0.0/16, cloud metadata), multicast, reserved, IPv6 ULA etc. are refused, and a
+    host name whose addresses are not all public is refused too (no DNS-based pivoting)."""
+    try:
+        parts = urlparse(url)
+    except ValueError as exc:
+        raise UnsafeURL(f"ungültige URL: {exc}") from None
+    scheme = (parts.scheme or "").lower()
+    if scheme not in ALLOWED_SCHEMES:
+        raise UnsafeURL(f"Schema {scheme or '-'} nicht erlaubt")
+    host = (parts.hostname or "").strip().rstrip(".").lower()
+    if not host or parts.username or parts.password:
+        raise UnsafeURL("Host fehlt oder URL enthält Zugangsdaten")
+    try:
+        port = parts.port or (443 if scheme == "https" else 80)
+    except ValueError:
+        raise UnsafeURL("ungültiger Port") from None
+    if port not in ALLOWED_PORTS:
+        raise UnsafeURL(f"Port {port} nicht erlaubt")
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        addrs = [host.strip("[]")]
+    except ValueError:
+        if host in ("localhost",) or host.endswith((".localhost", ".local", ".internal", ".home.arpa")):
+            raise UnsafeURL(f"{host}: interner Hostname")
+        addrs = _resolve(host)
+    if not addrs:
+        raise UnsafeURL(f"{host}: keine Adresse")
+    for addr in addrs:
+        if not _is_public(addr):
+            raise UnsafeURL(f"{host} zeigt auf eine nicht öffentliche Adresse ({addr})")
+    return host, port, addrs[0]
+
+
+def _pinned(url: str, host: str, port: int, ip: str) -> str:
+    """The same URL addressed to the checked IP, so the connection goes where the check went
+    (no DNS re-resolution between check and connect)."""
+    parts = urlparse(url)
+    netloc = f"[{ip}]" if ":" in ip else ip
+    if port != (443 if parts.scheme == "https" else 80):
+        netloc += f":{port}"
+    return urlunparse(parts._replace(netloc=netloc))
 
 
 def _text_of(soup: BeautifulSoup, limit: int) -> str:
@@ -236,7 +330,7 @@ def crawl(
     headers = {"User-Agent": s.crawl_user_agent, "Accept-Language": "de-CH,de;q=0.9,en;q=0.5"}
     emails: dict[str, None] = {}
     try:
-        with httpx.Client(timeout=timeout or s.crawl_timeout, follow_redirects=True, headers=headers) as client:
+        with _make_client(timeout or s.crawl_timeout, headers) as client:
             html, base = _fetch(client, website, s.crawl_max_bytes)
             res.pages_fetched += 1
             if html is None:
@@ -269,29 +363,53 @@ def crawl(
     return res
 
 
+def _make_client(timeout: float, headers: dict) -> httpx.Client:
+    """Redirects are followed by hand in _fetch (every hop is checked). Tests patch this."""
+    return httpx.Client(timeout=timeout, follow_redirects=False, headers=headers)
+
+
 def _fetch(client: httpx.Client, url: str, max_bytes: int) -> tuple[str | None, str]:
-    """Return (html, final_url). html is None on failure."""
+    """Return (html, final_url). html is None on failure.
+
+    Every URL (and every redirect target, at most MAX_REDIRECTS hops) is checked with
+    check_url and requested at the resolved IP with the Host header set, so the crawler
+    cannot be pointed at the LAN. Only text/html bodies up to max_bytes are read."""
+    final = url
     try:
-        with client.stream("GET", url) as r:
-            final = str(r.url)
-            if r.status_code != 200:
-                return None, final
-            ctype = r.headers.get("content-type", "")
-            if ctype and "html" not in ctype and "xml" not in ctype:
-                return None, final
-            chunks = []
-            size = 0
-            for chunk in r.iter_bytes():
-                chunks.append(chunk)
-                size += len(chunk)
-                if size > max_bytes:
-                    break
-            raw = b"".join(chunks)
-            enc = r.encoding or "utf-8"
-            return raw.decode(enc, errors="replace"), final
+        for _ in range(MAX_REDIRECTS + 1):
+            host, port, ip = check_url(final)
+            req_headers = {"Host": host if port in (80, 443) else f"{host}:{port}"}
+            with client.stream("GET", _pinned(final, host, port, ip), headers=req_headers, extensions={"sni_hostname": host}) as r:
+                if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
+                    final = urljoin(final, r.headers["location"]).split("#")[0]
+                    continue
+                if r.status_code != 200:
+                    return None, final
+                ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
+                if ctype not in HTML_TYPES:
+                    return None, final
+                length = r.headers.get("content-length")
+                if length and length.isdigit() and int(length) > max_bytes:
+                    return None, final
+                chunks = []
+                size = 0
+                for chunk in r.iter_bytes():
+                    if size + len(chunk) > max_bytes:
+                        chunks.append(chunk[: max_bytes - size])
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+                raw = b"".join(chunks)
+                enc = r.encoding or "utf-8"
+                return raw.decode(enc, errors="replace"), final
+        log.debug("fetch %s: zu viele Weiterleitungen", url)
+        return None, final
+    except UnsafeURL as exc:
+        log.info("fetch %s abgelehnt: %s", final, exc)
+        return None, final
     except Exception as exc:
-        log.debug("fetch %s failed: %s", url, exc)
-        return None, url
+        log.debug("fetch %s failed: %s", final, exc)
+        return None, final
 
 
 def _page_kind(url: str) -> str:

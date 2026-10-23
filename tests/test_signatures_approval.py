@@ -154,16 +154,76 @@ def test_approve_drafts_needs_exactly_one_selector(client, db_data):
 
 
 def test_update_campaign_auto_approve_releases_drafts(client, db_data):
+    from unittest import mock
+
+    from app.config import get_settings
+
     cid = db_data["campaign_alpha"]
     ids = _with_drafts(client, cid)
     url = f"/api/v1/campaigns/{cid}"
-    r = client.patch(url, json={"auto_approve": True, "name": "Neu"}, headers=AUTH).json()
-    assert r["confirmed"] is False and len(r["preview"]["drafts_released"]) == 2
+    # auto_approve via API is off by default: even the preview is refused and nothing changes
+    r = client.patch(url, json={"auto_approve": True, "name": "Neu"}, headers=AUTH)
+    assert r.status_code == 403 and r.json()["error"]["code"] == "auto_approve_disabled"
+    r = client.patch(url, json={"auto_approve": True, "name": "Neu", "confirm": True}, headers=AUTH)
+    assert r.status_code == 403
     with SessionLocal() as db:
-        assert db.get(Campaign, cid).auto_approve is False
-    r = client.patch(url, json={"auto_approve": True, "name": "Neu", "confirm": True}, headers=AUTH).json()
+        assert db.get(Campaign, cid).auto_approve is False and db.get(Campaign, cid).name != "Neu"
+    assert set(_statuses(ids).values()) == {("needs_review", "draft")}
+    with mock.patch.object(get_settings(), "outreach_allow_auto_approve", True):
+        r = client.patch(url, json={"auto_approve": True, "name": "Neu"}, headers=AUTH).json()
+        assert r["confirmed"] is False and len(r["preview"]["drafts_released"]) == 2
+        with SessionLocal() as db:
+            assert db.get(Campaign, cid).auto_approve is False
+        r = client.patch(url, json={"auto_approve": True, "name": "Neu", "confirm": True}, headers=AUTH).json()
     assert r["confirmed"] is True and r["drafts_released"] == 2 and r["campaign"]["name"] == "Neu"
     assert set(_statuses(ids).values()) == {("scheduled", "approved")}
+
+
+def test_create_campaign_auto_approve_needs_env_flag(client, db_data):
+    from unittest import mock
+
+    from app.config import get_settings
+
+    body = {"name": "Auto", "sender_name": "A", "sender_email": "a@alpha.example", "reply_to": "r@alpha.example", "auto_approve": True, "confirm": True}
+    r = client.post("/api/v1/campaigns", json=body, headers=AUTH)
+    assert r.status_code == 403 and r.json()["error"]["code"] == "auto_approve_disabled"
+    with SessionLocal() as db:
+        assert db.query(Campaign).filter(Campaign.name == "Auto").count() == 0
+    with mock.patch.object(get_settings(), "outreach_allow_auto_approve", True):
+        r = client.post("/api/v1/campaigns", json=body, headers=AUTH)
+    assert r.status_code == 200 and r.json()["campaign"]["auto_approve"] is True
+
+
+def test_sender_email_must_be_on_allowed_domain(client, db_data):
+    from unittest import mock
+
+    from app.config import get_settings
+
+    def create(sender, reply_to="r@alpha.example"):
+        body = {"name": "X", "sender_name": "A", "sender_email": sender, "reply_to": reply_to, "confirm": True}
+        return client.post("/api/v1/campaigns", json=body, headers=AUTH)
+
+    # tenant alpha sends from info@alpha.example: only that domain, in any spelling
+    assert create("vertrieb@alpha.example").status_code == 200
+    assert create("Vertrieb@ALPHA.example").status_code == 200
+    for bad in ("ceo@kunde.example", "x@alpha.example.attacker.example", "x@sub.alpha.example"):
+        r = create(bad)
+        assert r.status_code == 422 and r.json()["error"]["code"] == "sender_not_allowed", bad
+        assert r.json()["error"]["details"][0]["loc"] == ["sender_email"]
+    r = create("vertrieb@alpha.example", reply_to="antwort@kunde.example")
+    assert r.status_code == 422 and r.json()["error"]["details"][0]["loc"] == ["reply_to"]
+    with SessionLocal() as db:
+        assert db.query(Campaign).filter(Campaign.from_email.like("%kunde.example")).count() == 0
+    # extra domains via OUTREACH_SENDER_DOMAINS
+    with mock.patch.object(get_settings(), "outreach_sender_domains", "kunde.example, extra.example"):
+        assert create("ceo@kunde.example", reply_to="x@extra.example").status_code == 200
+    # the same rule for update_campaign
+    cid = db_data["campaign_alpha"]
+    r = client.patch(f"/api/v1/campaigns/{cid}", json={"sender_email": "x@kunde.example", "confirm": True}, headers=AUTH)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "sender_not_allowed"
+    with SessionLocal() as db:
+        assert db.get(Campaign, cid).from_email is None
+    assert client.patch(f"/api/v1/campaigns/{cid}", json={"sender_email": "x@alpha.example", "confirm": True}, headers=AUTH).status_code == 200
 
 
 def test_reject_draft(client, db_data):

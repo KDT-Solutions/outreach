@@ -14,3 +14,5 @@ anthropic>=0.40
 pydantic>=2.8
 pydantic-settings>=2.4
 mcp>=2.3,<3
+argon2-cffi>=23.1
+pyotp>=2.9

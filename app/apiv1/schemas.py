@@ -75,7 +75,7 @@ class CampaignCreate(_Strict):
     sender_email: Email
     reply_to: Email
     language: Lang = "de"
-    auto_approve: bool = Field(False, description="Gerenderte Mails ohne manuelle Freigabe in der Oberfläche senden")
+    auto_approve: bool = Field(False, description="Gerenderte Mails ohne manuelle Freigabe in der Oberfläche senden (nur mit OUTREACH_ALLOW_AUTO_APPROVE=true)")
     signature_override: SignatureText | None = None
     unsubscribe_text_override: UnsubscribeText | None = None
     confirm: bool = False
@@ -86,7 +86,7 @@ class CampaignUpdate(_Strict):
     sender_name: Line(120) | None = None
     sender_email: Email | None = None
     reply_to: Email | None = None
-    auto_approve: bool | None = Field(None, description="true: wartende Entwürfe werden freigegeben und gehen in den Versand")
+    auto_approve: bool | None = Field(None, description="true: wartende Entwürfe werden freigegeben und gehen in den Versand (nur mit OUTREACH_ALLOW_AUTO_APPROVE=true)")
     confirm: bool = False
 
     def changes(self) -> dict:

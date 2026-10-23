@@ -10,7 +10,14 @@ class Settings(BaseSettings):
     secret_key: str
     data_encryption_key: str
     admin_user: str = "admin"
-    admin_password: str
+    # argon2 hash of the admin password: python -m app.tools hash-password (base64-wrapped, because the
+    # $ in a raw hash breaks .env files and Compose variable substitution)
+    admin_password_hash: str = ""
+    admin_password_hash_b64: str = ""
+    # plain password; only used when no hash is set (logged as a warning at start-up)
+    admin_password: str = ""
+    # optional TOTP secret (base32) for a second factor: python -m app.tools totp-secret
+    admin_totp_secret: str = ""
     api_token: str = ""
     public_base_url: str = "http://localhost:8000"
 
@@ -38,13 +45,18 @@ class Settings(BaseSettings):
     outreach_mcp_allowed_hosts: str = ""
     # comma-separated domains send_test may send to; empty = send_test disabled
     outreach_test_allow_domains: str = ""
+    # comma-separated domains allowed as campaign sender/reply-to via the API, on top of the
+    # domains of the tenant's own from/reply-to address; empty = tenant domains only
+    outreach_sender_domains: str = ""
+    # auto_approve=true via API/MCP (mails go out without review) only when this is true
+    outreach_allow_auto_approve: bool = False
 
     tz: str = "Europe/Zurich"
     worker_interval_seconds: int = 60
 
-    # crawler
+    # crawler: per-page timeout and body limit; only public http(s) hosts on 80/443 are fetched
     crawl_timeout: float = 12.0
-    crawl_max_bytes: int = 1_500_000
+    crawl_max_bytes: int = 2_000_000
     crawl_user_agent: str = "Mozilla/5.0 (compatible; OutreachBot/0.1; +https://example.com)"
 
     # API search_leads / enrich_leads: per page timeout, pages per domain (incl. start
@@ -62,4 +74,9 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]
+    s = Settings()  # type: ignore[call-arg]
+    if s.admin_password_hash_b64 and not s.admin_password_hash:
+        import base64
+
+        s.admin_password_hash = base64.b64decode(s.admin_password_hash_b64).decode().strip()
+    return s
