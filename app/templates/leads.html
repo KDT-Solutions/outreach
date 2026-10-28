@@ -1,17 +1,20 @@
-{% extends "base.html" %}{% from "_macros.html" import status_badge, dt %}
+{% extends "base.html" %}{% from "_macros.html" import status_badge, status_label, dt %}
 {% block content %}
 <h1>Leads</h1>
 <form method="get" action="/leads" class="filters">
+<div><label>Suche</label><input type="search" name="q" value="{{ q }}" placeholder="Firma, Telefon, Person, Ort, E-Mail, Notiz" autofocus></div>
 <div><label>Kampagne</label><select name="campaign"><option value="">alle</option>{% for c in campaigns %}<option value="{{ c.id }}" {{ 'selected' if campaign==c.id }}>{{ c.name }}</option>{% endfor %}</select></div>
-<div><label>Status</label><select name="status"><option value="">alle</option>{% for s in lead_statuses %}<option value="{{ s }}" {{ 'selected' if status==s }}>{{ 'wartend' if s == 'waiting' else s }}</option>{% endfor %}</select></div>
-<div><label>Suche</label><input type="text" name="q" value="{{ q }}" placeholder="Firma, E-Mail, Domain"></div>
-<div><button class="secondary">Filtern</button></div>
+<div><label>Status</label><select name="status"><option value="">alle</option>{% for s in lead_statuses %}<option value="{{ s }}" {{ 'selected' if status==s }}>{{ status_label(s) }}</option>{% endfor %}</select></div>
+<div><button class="secondary">Suchen</button></div>
 </form>
-<table><tr><th>#</th><th>Firma</th><th>Ort</th><th>E-Mail</th><th>Ansprechperson</th><th>Status</th><th>Schritt</th><th>Nächster Versand</th></tr>
+<p class="small muted">Durchsucht alle Kampagnen: Firma, Telefon (jede Schreibweise), Ansprechperson, Ort, Adresse, E-Mail, Domain und Notizen. Satzzeichen und Akzente spielen keine Rolle.</p>
+{% if q and partial and leads %}<p class="small"><span class="badge warn">ähnlich</span> Kein Lead passt auf alle Wörter, angezeigt werden die Leads mit den meisten Treffern.</p>{% endif %}
+{% if leads|length >= limit %}<p class="small muted">Nur die ersten {{ limit }} Treffer, Suche eingrenzen.</p>{% endif %}
+<table><tr><th>#</th><th>Firma</th><th>Ort</th><th>Telefon</th><th>E-Mail</th><th>Ansprechperson</th><th>Kampagne</th><th>Status</th><th>Schritt</th><th>Nächster Versand</th></tr>
 {% for l in leads %}
-<tr><td class="muted small">{{ l.id }}</td><td><a href="/leads/{{ l.id }}">{{ l.company }}</a><br><span class="small muted">{{ l.website or '' }}</span></td>
-<td class="small">{{ l.address or '' }}</td><td class="small">{{ l.email or '–' }}{% if l.email_source %} <span class="badge">{{ l.email_source }}</span>{% endif %}</td>
-<td class="small">{{ l.contact_name or '–' }}</td><td>{{ status_badge(l.status) }}</td><td>{{ l.step }}</td><td class="small">{{ dt(l.next_send_at) }}</td></tr>
-{% else %}<tr><td colspan="8" class="muted">Keine Leads für diesen Filter.</td></tr>{% endfor %}
+<tr><td class="muted small">{{ l.id }}</td><td><a href="/leads/{{ l.id }}">{{ l.company }}</a><br><span class="small muted">{{ l.website or '' }}</span>{% if l.notes %}<br><span class="small muted">{{ l.notes|truncate(90) }}</span>{% endif %}</td>
+<td class="small">{{ l.address or l.city or '' }}</td><td class="small">{{ l.phone or '–' }}</td><td class="small">{{ l.email or '–' }}{% if l.email_source %} <span class="badge">{{ l.email_source }}</span>{% endif %}</td>
+<td class="small">{{ l.contact_name or '–' }}</td><td class="small">{{ campaign_names.get(l.campaign_id, '') }}</td><td>{{ status_badge(l.status) }}</td><td>{{ l.step }}</td><td class="small">{{ dt(l.next_send_at) }}</td></tr>
+{% else %}<tr><td colspan="10" class="muted">Keine Leads für diesen Filter.</td></tr>{% endfor %}
 </table>
 {% endblock %}

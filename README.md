@@ -95,6 +95,14 @@ setups with one API key per tenant.
 6. A campaign or single leads can be set to **wartend** (status `waiting`) with a reason, e.g.
    when they should only go out after another campaign got its answers. Nothing is sourced,
    drafted or sent for them, and their drafts disappear from **Freigabe** until released.
+7. A lead that turned into business outside the mail flow (it called back, a meeting is agreed)
+   is marked **erfolgreich** (status `won`) with a short note: the sequence stops for good, a
+   later mail reply does not overwrite it, and the dashboard counts it. A refusal by mail is
+   status `replied` with the reply classified as `not_interested` on the incoming message.
+8. The search box on the dashboard and under **Leads** searches all campaigns: company, phone
+   in any notation, contact person, place, address, e-mail, domain and notes. Punctuation and
+   accents are ignored ("HSK" finds "H.S.K CLES SERVICES"), so a name or number from a call
+   note is enough.
 
 ## JSON API
 
@@ -178,6 +186,8 @@ Fehler sind immer JSON:
 | `start_campaign` / `pause_campaign` / `stop_campaign` | `POST /api/v1/campaigns/{id}/start` / `pause` / `stop` |
 | `wait_campaign` | `POST /api/v1/campaigns/{id}/wait` (Status wartend mit Grund, zurück mit `start_campaign`) |
 | `wait_leads` / `release_leads` | `POST /api/v1/campaigns/{id}/leads/wait` / `release` |
+| `mark_lead_won` / `unmark_lead_won` | `POST /api/v1/leads/{id}/won` (`note`) / `unwon` |
+| `find_leads` | `GET /api/v1/leads/search?q=&tenant=&status=&limit=` (über alle Kampagnen) |
 | `get_stats` | `GET /api/v1/campaigns/{id}/stats` |
 | `get_delivery_status` | `GET /api/v1/campaigns/{id}/delivery` (Zustellstatus pro Mail laut SMTP2GO) |
 | `list_audit_log` | `GET /api/v1/audit?tenant=&campaign_id=&tool=&since=` |
@@ -320,6 +330,30 @@ und API (`wait_reason`).
 - In der Weboberfläche: Kampagne über «Auf wartend setzen» mit Grund, zurück über «Aktivieren»;
   Lead über «Auf wartend setzen» bzw. «Nicht mehr wartend». Die Freigabe zeigt die Zahl der
   ausgeblendeten Entwürfe.
+
+### Erfolgreich (Status `won`)
+
+Für Leads, aus denen etwas geworden ist, auch ausserhalb der Mails (Rückruf übers Telefon,
+Termin vereinbart). `mark_lead_won` mit kurzer Notiz (`note`, z.B. «Rückruf Hr. Muster,
+Termin vereinbart») stoppt die Sequenz endgültig und verwirft ungesendete Mails; möglich aus
+jedem Status, auch `replied` oder `waiting`. Eine spätere Mail-Antwort wird als Nachricht
+gespeichert, der Status bleibt `won`. `get_stats` zählt sie unter `won`, die Übersicht unter
+«Erfolgreich». `unmark_lead_won` nimmt es zurück (auf `replied`, wenn eine Antwort vorliegt,
+sonst `stopped`); die Sequenz wird nicht fortgesetzt. In der Weboberfläche: «Als erfolgreich
+markieren» bzw. «Erfolgreich zurücknehmen» auf der Lead-Seite.
+
+Nicht interessiert: Absagen per Mail stuft der Zammad-Abgleich als `not_interested` ein (an der
+eingegangenen Nachricht, in `get_stats` unter `replies_by_class`), der Lead steht auf `replied`.
+
+### Lead-Suche
+
+`find_leads` und das Suchfeld in der Übersicht bzw. unter **Leads** durchsuchen alle Kampagnen
+nach Firma, Telefon, Ansprechperson, Ort, Adresse, E-Mail, Domain und Notizen. Gross-/Klein-
+schreibung, Satzzeichen und Akzente spielen keine Rolle, Telefonnummern passen in jeder
+Schreibweise (`+41 21 831 00 01`, `021 831 00 01`, `0041218310001`). Alle Wörter müssen passen;
+passt kein Lead auf alle, kommen die Leads mit den meisten Treffern (`partial_match`, in der
+Oberfläche als «ähnlich» markiert), damit auch ein ganzer Firmenname aus einer Rückrufnotiz
+etwas findet.
 
 ### Beispiele mit curl
 

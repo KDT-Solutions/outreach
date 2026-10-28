@@ -73,6 +73,22 @@ def unsuppress_lead(request: Request, lead_id: int, body: schemas.Confirm):
     return _run(request, "unsuppress_lead", partial(service.unsuppress_lead, lead_id=lead_id, data=body), write=True)
 
 
+@router.post("/leads/{lead_id}/won", summary="mark_lead_won")
+def mark_lead_won(request: Request, lead_id: int, body: schemas.LeadWon):
+    return _run(request, "mark_lead_won", partial(service.mark_lead_won, lead_id=lead_id, data=body), write=True)
+
+
+@router.post("/leads/{lead_id}/unwon", summary="unmark_lead_won")
+def unmark_lead_won(request: Request, lead_id: int, body: schemas.Confirm):
+    return _run(request, "unmark_lead_won", partial(service.unmark_lead_won, lead_id=lead_id, data=body), write=True)
+
+
+@router.get("/leads/search", summary="find_leads")
+def find_leads(request: Request, q: str = Query(..., min_length=1, max_length=300), tenant: str | None = None,
+               status: str | None = None, limit: int = Query(50, ge=1, le=200)):
+    return _run(request, "find_leads", partial(service.find_leads, query=q, tenant=tenant, status=status, limit=limit))
+
+
 @router.delete("/leads/{lead_id}", summary="delete_lead")
 def delete_lead(request: Request, lead_id: int, confirm: bool = False):
     return _run(request, "delete_lead", partial(service.delete_lead, lead_id=lead_id, data=schemas.Confirm(confirm=confirm)), write=True)

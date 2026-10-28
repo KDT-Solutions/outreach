@@ -123,6 +123,47 @@ def release_lead(db: Session, lead: Lead) -> str | None:
     return prev
 
 
+# ---------------------------------------------------------------- won (success, set by the operator)
+def mark_lead_won(db: Session, lead: Lead, note: str | None) -> int:
+    """Mark a lead as success (e.g. it called back, a meeting is agreed): the sequence stops,
+    unsent mails are discarded, a parked lead is no longer waiting. Returns the number of
+    discarded mails. Calling it again on a won lead only updates the note."""
+    note = (note or "").strip() or None
+    if lead.status == "won":
+        lead.won_note = note or lead.won_note
+        return 0
+    n = 0
+    for m in lead.messages:
+        if m.direction == "out" and m.status in ("draft", "approved"):
+            m.status = "failed"
+            m.error = "Lead erfolgreich, Sequenz gestoppt"
+            n += 1
+    prev = lead.status
+    lead.status = "won"
+    lead.won_at = datetime.now(timezone.utc)
+    lead.won_note = note
+    lead.next_send_at = None
+    lead.wait_reason = None
+    lead.wait_prev_status = None
+    log_event(db, "lead_won", f"erfolgreich (vorher {prev})" + (f": {note}" if note else ""), lead.tenant_id, lead.id)
+    return n
+
+
+def unmark_lead_won(db: Session, lead: Lead) -> str | None:
+    """Take back "won" (set by mistake). The sequence is not resumed: the lead goes to
+    replied if a human reply exists, otherwise to stopped. Returns the new status, or None
+    if the lead was not won."""
+    if lead.status != "won":
+        return None
+    human_reply = any(
+        m.direction == "in" and m.classification not in ("out_of_office", "auto_reply") for m in lead.messages
+    )
+    lead.status = "replied" if human_reply else "stopped"
+    lead.won_at = None
+    log_event(db, "lead_won_undone", f"erfolgreich zurückgenommen -> {lead.status}", lead.tenant_id, lead.id)
+    return lead.status
+
+
 def approval_blocked(msg: Message) -> str | None:
     """Reason a draft cannot be approved right now, or None."""
     lead = msg.lead
@@ -579,7 +620,8 @@ def poll_replies(db: Session) -> int:
             if cls in ("out_of_office", "auto_reply"):
                 log_event(db, "reply_auto", f"{cls} von {from_email} (Ticket {t.get('number')})", tenant.id, lead.id)
             else:
-                lead.status = "replied"
+                if lead.status != "won":  # a success set by the operator is not overwritten by a later mail
+                    lead.status = "replied"
                 lead.next_send_at = None
                 lead.wait_reason = None
                 lead.wait_prev_status = None

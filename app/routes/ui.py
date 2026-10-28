@@ -17,7 +17,7 @@ from ..auth import COOKIE, require_csrf, require_login
 from ..config import get_settings
 from ..db import get_db
 from ..models import LEAD_STATUSES, Campaign, Event, Lead, Message, Suppression, Tenant, TenantSignature
-from ..services import mailtext, scheduling, templating
+from ..services import leadsearch, mailtext, scheduling, templating
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -311,17 +311,12 @@ async def campaign_status(campaign_id: int, request: Request, sess: dict = Depen
 # ---------------------------------------------------------------- leads
 @router.get("/leads", response_class=HTMLResponse)
 def leads(request: Request, campaign: int | None = None, status: str | None = None, q: str | None = None, sess: dict = Depends(require_login), db: Session = Depends(get_db)):
-    query = db.query(Lead).filter(Lead.deleted_at.is_(None))
-    if campaign:
-        query = query.filter(Lead.campaign_id == campaign)
-    if status:
-        query = query.filter(Lead.status == status)
-    if q:
-        like = f"%{q}%"
-        query = query.filter((Lead.company.ilike(like)) | (Lead.email.ilike(like)) | (Lead.domain.ilike(like)))
-    rows = query.order_by(Lead.id.desc()).limit(500).all()
+    q = (q or "").strip()[:300]
+    rows, partial = leadsearch.search(db, q, campaign, status or None)
     campaigns = db.query(Campaign).order_by(Campaign.id.desc()).all()
-    return render(request, "leads.html", sess, leads=rows, campaigns=campaigns, campaign=campaign, status=status, q=q or "")
+    names = {c.id: c.name for c in campaigns}
+    return render(request, "leads.html", sess, leads=rows, partial=partial, campaigns=campaigns, campaign_names=names,
+                  campaign=campaign, status=status, q=q, limit=leadsearch.LIMIT)
 
 
 @router.get("/leads/{lead_id}", response_class=HTMLResponse)
@@ -343,9 +338,12 @@ async def lead_action(lead_id: int, request: Request, sess: dict = Depends(requi
     reason = " ".join(f.get("wait_reason", "").split())[:500]
     if action == "wait" and not reason:
         raise HTTPException(400, "Für wartend einen Grund angeben")
-    if action in ("stop", "skip", "requeue", "set_email", "generate", "suppress", "wait", "release"):
+    won_note = " ".join(f.get("won_note", "").split())[:500]
+    if action in ("stop", "skip", "requeue", "set_email", "generate", "suppress", "wait", "release", "won", "unwon"):
         _audit(db, request, sess, f"ui_lead_{action}", lead.tenant_id, {"lead_id": lead.id, "campaign_id": lead.campaign_id},
-               f.get("email", "").strip() if action == "set_email" else reason if action == "wait" else "")
+               f.get("email", "").strip() if action == "set_email" else reason if action == "wait" else won_note if action == "won" else "")
+    if lead.status == "won" and action in ("requeue", "set_email", "generate", "wait", "release", "stop", "skip"):
+        raise HTTPException(409, "Lead ist erfolgreich, zuerst 'Erfolgreich zurücknehmen'")
     if lead.status == "waiting" and action in ("requeue", "set_email", "generate"):
         raise HTTPException(409, "Lead ist wartend, zuerst freigeben")
     if action in ("stop", "skip"):
@@ -400,6 +398,10 @@ async def lead_action(lead_id: int, request: Request, sess: dict = Depends(requi
             raise HTTPException(409, f"Leads mit Status {lead.status} können nicht auf wartend gesetzt werden")
     elif action == "release":
         pipeline.release_lead(db, lead)
+    elif action == "won":
+        pipeline.mark_lead_won(db, lead, won_note)
+    elif action == "unwon":
+        pipeline.unmark_lead_won(db, lead)
     elif action == "note":
         lead.notes = f.get("notes", "").strip()
     db.commit()
