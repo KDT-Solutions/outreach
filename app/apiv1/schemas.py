@@ -146,6 +146,11 @@ class ReleaseLeads(_LeadSelection):
     pass
 
 
+class LeadWon(_Strict):
+    note: Line(500) | None = None
+    confirm: bool = False
+
+
 class LeadIn(_Strict):
     firma: Line(200)
     anrede: OptLine(120) = None

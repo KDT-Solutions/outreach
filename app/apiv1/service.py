@@ -18,7 +18,7 @@ from .. import crypto, pipeline
 from ..config import get_settings
 from ..db import SessionLocal
 from ..models import LEAD_STATUSES, ApiAudit, Campaign, Lead, Message, Suppression, Tenant, TenantSignature
-from ..services import signature, smtp2go, templating
+from ..services import leadsearch, signature, smtp2go, templating
 from . import schemas
 from .security import Principal
 
@@ -228,6 +228,8 @@ def lead_dict(l: Lead) -> dict:
     )
     if l.status == "waiting":
         d.update(wait_reason=l.wait_reason, status_after_release=l.wait_prev_status)
+    if l.status == "won":
+        d.update(won_at=_iso(l.won_at), won_note=l.won_note)
     if l.status == "unsubscribed" or l.unsubscribe_reason:
         d.update(unsubscribe_reason=l.unsubscribe_reason, unsubscribe_comment=l.unsubscribe_comment, unsubscribed_at=_iso(l.unsubscribed_at), unsubscribe_source=l.unsubscribe_source)
     return d
@@ -294,6 +296,7 @@ def get_stats(db: Session, call: Call, campaign_id: int) -> dict:
         "leads_contacted": contacted,
         "bounces": statuses.get("bounced", 0),
         "unsubscribed": statuses.get("unsubscribed", 0),
+        "won": statuses.get("won", 0),
         "unsubscribe_reasons": {k or "ohne_angabe": v for k, v in unsub_reasons.items()},
         "replies": sum(replies.values()) - auto,
         "auto_replies": auto,
@@ -516,6 +519,51 @@ def release_leads(db: Session, call: Call, campaign_id: int, data: schemas.Relea
     call.ids["lead_ids"] = list(done)
     call.detail = f"{len(done)} nicht mehr wartend"
     return {"confirmed": True, "released": [{"lead_id": k, "status": v} for k, v in done.items()]}
+
+
+def mark_lead_won(db: Session, call: Call, lead_id: int, data: schemas.LeadWon) -> dict:
+    """Success outside the mail flow (e.g. the lead called back): stop the sequence for good,
+    discard unsent mails, keep the note. A later mail reply does not overwrite it."""
+    lead = _lead(db, call, lead_id)
+    pending = [m.id for m in lead.messages if m.direction == "out" and m.status in ("draft", "approved")]
+    preview = {
+        "lead": {"lead_id": lead.id, "firma": lead.company, "status": lead.status},
+        "status": {"from": lead.status, "to": "won"},
+        "note": data.note,
+        "pending_mails_discarded": 0 if lead.status == "won" else len(pending),
+        "effect": "Sequenz gestoppt, keine weiteren Mails. Zählt in get_stats als won.",
+    }
+    if not data.confirm:
+        return _preview(preview)
+    discarded = pipeline.mark_lead_won(db, lead, data.note)
+    call.detail = f"won: {data.note or '-'}"[:2000]
+    return {"confirmed": True, "lead": lead_dict(lead), "pending_mails_discarded": discarded}
+
+
+def unmark_lead_won(db: Session, call: Call, lead_id: int, data: schemas.Confirm) -> dict:
+    lead = _lead(db, call, lead_id)
+    if lead.status != "won":
+        raise ApiError(409, "not_won", f"Lead hat Status {lead.status}, nicht won")
+    if not data.confirm:
+        return _preview({"lead_id": lead.id, "status": {"from": "won", "to": "replied oder stopped"},
+                         "effect": "Die Sequenz wird nicht fortgesetzt."})
+    new = pipeline.unmark_lead_won(db, lead)
+    call.detail = f"won -> {new}"
+    return {"confirmed": True, "lead": lead_dict(lead)}
+
+
+def find_leads(db: Session, call: Call, query: str, tenant: str | None = None, status: str | None = None, limit: int = 50) -> dict:
+    """Search leads across campaigns: company, phone in any notation, person, place, e-mail, notes."""
+    if status and status not in LEAD_STATUSES:
+        raise ApiError(400, "bad_status", f"Unbekannter Status {status}")
+    tenants = [_tenant(db, call, tenant)] if tenant else _tenants(db, call)
+    rows, partial = leadsearch.search(db, query, status=status, tenant_ids=[t.id for t in tenants], limit=max(1, min(limit, 200)))
+    names = {c.id: c.name for c in db.query(Campaign).filter(Campaign.id.in_({l.campaign_id for l in rows}))} if rows else {}
+    return {
+        "query": query,
+        "partial_match": partial,
+        "leads": [dict(lead_dict(l), telefon=l.phone, kampagne=names.get(l.campaign_id)) for l in rows],
+    }
 
 
 def set_sequence(db: Session, call: Call, campaign_id: int, data: schemas.SequenceSet) -> dict:

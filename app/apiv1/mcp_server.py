@@ -28,12 +28,13 @@ Platzhalter in Betreff und Text: {{anrede}}, {{vorname}}, {{nachname}}, {{firma}
 Signatur: Kampagnen-Override > Mandantensignatur in der Sprache des Leads > in der Kampagnensprache > Standardsignatur; gleiches für den Abmeldetext. Platzhalter in Signaturen: {{sender_name}}, {{sender_email}}, {{reply_to}}, {{unsubscribe_url}}.
 Freigabe per API: list_drafts zeigt wartende Entwürfe, approve_drafts gibt sie frei, reject_draft verwirft einen.
 Wartend (Status waiting, mit Grund): wait_campaign parkt eine ganze Kampagne (zurück mit start_campaign), wait_leads parkt einzelne Leads (zurück mit release_leads). Geparkt heisst: nichts wird entworfen oder gesendet, Entwürfe verschwinden aus der Freigabe (/review) und approve_drafts überspringt sie. Gedacht für Kampagnen oder Leads, die erst nach einer Bedingung raus sollen (z.B. Antworten einer anderen Kampagne, fehlende Unterlagen).
+Lead finden: find_leads sucht über alle Kampagnen nach Firma, Telefon (jede Schreibweise), Ansprechperson, Ort, E-Mail, Domain und Notizen, z.B. mit Name oder Nummer aus einer Rückrufnotiz.
 Kontrolle: list_audit_log zeigt, wer was wann ausgelöst hat (API, MCP, Weboberfläche); get_delivery_status zeigt pro gesendeter Mail den Zustellstatus bei SMTP2GO.
 
 Freigabe (auto_approve):
 - auto_approve=false (Standard): Jeder Mailentwurf, auch jedes Follow-up, bekommt Lead-Status "needs_review" und wartet in der Weboberfläche unter /review. Erst nach Freigabe durch Kim (Weboberfläche oder approve_drafts) wird die Mail terminiert und im Sendefenster verschickt. Ohne Freigabe geht nichts raus, egal wie lange ein Entwurf liegt. Kampagne "active" heisst also nur: Leads werden gesucht, angereichert und Entwürfe geschrieben.
 - auto_approve=true: Entwürfe werden ohne Sichtung sofort als freigegeben gespeichert und im nächsten Sendefenster verschickt. Nur setzen, wenn Kim das ausdrücklich will.
-Lead-Status: new (gefunden) -> enriched (E-Mail gefunden) -> needs_review (Entwurf wartet) -> scheduled (freigegeben, wartet aufs Sendefenster) -> in_sequence (mindestens eine Mail gesendet, weitere Schritte offen) -> finished (alle Schritte gesendet). Abbrüche: replied (Antwort via Zammad erkannt, Sequenz gestoppt), bounced, unsubscribed, stopped, skipped, no_email, draft_failed (Entwurf 3x gescheitert, wartet auf Korrektur per update_lead; last_error zeigt die Modellantwort), waiting (vom Betreiber geparkt, wait_reason und status_after_release im Lead).
+Lead-Status: new (gefunden) -> enriched (E-Mail gefunden) -> needs_review (Entwurf wartet) -> scheduled (freigegeben, wartet aufs Sendefenster) -> in_sequence (mindestens eine Mail gesendet, weitere Schritte offen) -> finished (alle Schritte gesendet). Erfolg: won (von Hand gesetzt mit mark_lead_won, z.B. nach einem Rückruf oder vereinbarten Termin; Sequenz gestoppt, zählt in get_stats als won, wird von späteren Mail-Antworten nicht überschrieben; zurück mit unmark_lead_won). Abbrüche: replied (Antwort via Zammad erkannt, Sequenz gestoppt; die Einstufung interested/not_interested usw. steht an der eingegangenen Nachricht, replies_by_class in get_stats), bounced, unsubscribed, stopped, skipped, no_email, draft_failed (Entwurf 3x gescheitert, wartet auf Korrektur per update_lead; last_error zeigt die Modellantwort), waiting (vom Betreiber geparkt, wait_reason und status_after_release im Lead).
 Kampagnen-Status: draft, active, paused, waiting (geparkt mit wait_reason, Entwürfe ausgeblendet), done.
 Sendefenster pro Mandant: standardmässig Mo-Fr 9-17 Uhr, Tageslimit 40, Versand mit Zufallsverzögerung; Follow-ups werden einen Tag vor Fälligkeit als Entwurf vorbereitet.
 Ausgehende Mails werden nicht in Zammad erfasst; Antworten kommen über das Zammad-Postfach des Mandanten herein, stoppen die Sequenz und erhalten eine interne Notiz mit Lead-Link."""
@@ -232,7 +233,24 @@ def release_leads(ctx: Context, campaign_id: int, lead_ids: list[int] | None = N
     return _run(ctx, "release_leads", lambda db, call: service.release_leads(db, call, campaign_id, data), write=True)
 
 
-@mcp.tool(description="Kennzahlen: gesendet, Bounces, Abmeldungen, Antworten (aus dem Zammad-Abgleich).")
+@mcp.tool(description="Lead als erfolgreich markieren (Status won), z.B. nach einem Rückruf oder vereinbarten Termin. Sequenz stoppt, ungesendete Mails werden verworfen, note hält fest, was passiert ist. Auch von replied oder wartend aus möglich.")
+def mark_lead_won(ctx: Context, lead_id: int, note: str | None = None, confirm: Confirm = False) -> dict:
+    data = _model(schemas.LeadWon, note=note, confirm=confirm)
+    return _run(ctx, "mark_lead_won", lambda db, call: service.mark_lead_won(db, call, lead_id, data), write=True)
+
+
+@mcp.tool(description="Erfolgreich (won) zurücknehmen, falls versehentlich gesetzt. Der Lead geht auf replied (wenn eine Antwort vorliegt) oder stopped; die Sequenz wird nicht fortgesetzt.")
+def unmark_lead_won(ctx: Context, lead_id: int, confirm: Confirm = False) -> dict:
+    data = _model(schemas.Confirm, confirm=confirm)
+    return _run(ctx, "unmark_lead_won", lambda db, call: service.unmark_lead_won(db, call, lead_id, data), write=True)
+
+
+@mcp.tool(description="Leads über alle Kampagnen suchen: Firma, Telefon in jeder Schreibweise (+41 21 ..., 021 ...), Ansprechperson, Ort, Adresse, E-Mail, Domain, Notizen. Satzzeichen und Akzente egal. Alle Wörter müssen passen; sonst kommen die Leads mit den meisten Treffern (partial_match=true). Optional tenant und status.")
+def find_leads(ctx: Context, query: str, tenant: str | None = None, status: str | None = None, limit: int = 50) -> dict:
+    return _run(ctx, "find_leads", lambda db, call: service.find_leads(db, call, query, tenant, status, limit))
+
+
+@mcp.tool(description="Kennzahlen: gesendet, Bounces, Abmeldungen, Antworten (aus dem Zammad-Abgleich, nach Einstufung), erfolgreiche Leads (won).")
 def get_stats(ctx: Context, campaign_id: int) -> dict:
     return _run(ctx, "get_stats", lambda db, call: service.get_stats(db, call, campaign_id))
 
