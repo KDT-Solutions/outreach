@@ -95,10 +95,11 @@ setups with one API key per tenant.
 6. A campaign or single leads can be set to **wartend** (status `waiting`) with a reason, e.g.
    when they should only go out after another campaign got its answers. Nothing is sourced,
    drafted or sent for them, and their drafts disappear from **Freigabe** until released.
-7. A lead that turned into business outside the mail flow (it called back, a meeting is agreed)
-   is marked **erfolgreich** (status `won`) with a short note: the sequence stops for good, a
-   later mail reply does not overwrite it, and the dashboard counts it. A refusal by mail is
-   status `replied` with the reply classified as `not_interested` on the incoming message.
+7. The result of a lead outside the mail flow, e.g. after a phone call, is recorded with a short
+   note as **erfolgreich** (status `won`: called back, meeting agreed) or **nicht interessiert**
+   (status `not_interested`: refusal). The sequence stops for good, a later mail reply does not
+   overwrite it, and the dashboard counts both. A refusal by mail is status `replied` with the
+   reply classified as `not_interested` on the incoming message.
 8. The search box on the dashboard and under **Leads** searches all campaigns: company, phone
    in any notation, contact person, place, address, e-mail, domain and notes. Punctuation and
    accents are ignored ("HSK" finds "H.S.K CLES SERVICES"), so a name or number from a call
@@ -186,7 +187,7 @@ Fehler sind immer JSON:
 | `start_campaign` / `pause_campaign` / `stop_campaign` | `POST /api/v1/campaigns/{id}/start` / `pause` / `stop` |
 | `wait_campaign` | `POST /api/v1/campaigns/{id}/wait` (Status wartend mit Grund, zurück mit `start_campaign`) |
 | `wait_leads` / `release_leads` | `POST /api/v1/campaigns/{id}/leads/wait` / `release` |
-| `mark_lead_won` / `unmark_lead_won` | `POST /api/v1/leads/{id}/won` (`note`) / `unwon` |
+| `set_lead_outcome` / `clear_lead_outcome` | `POST /api/v1/leads/{id}/outcome` (`outcome`: `won` oder `not_interested`, `note`) / `outcome/clear` |
 | `find_leads` | `GET /api/v1/leads/search?q=&tenant=&status=&limit=` (über alle Kampagnen) |
 | `get_stats` | `GET /api/v1/campaigns/{id}/stats` |
 | `get_delivery_status` | `GET /api/v1/campaigns/{id}/delivery` (Zustellstatus pro Mail laut SMTP2GO) |
@@ -331,19 +332,21 @@ und API (`wait_reason`).
   Lead über «Auf wartend setzen» bzw. «Nicht mehr wartend». Die Freigabe zeigt die Zahl der
   ausgeblendeten Entwürfe.
 
-### Erfolgreich (Status `won`)
+### Ergebnis: erfolgreich / nicht interessiert
 
-Für Leads, aus denen etwas geworden ist, auch ausserhalb der Mails (Rückruf übers Telefon,
-Termin vereinbart). `mark_lead_won` mit kurzer Notiz (`note`, z.B. «Rückruf Hr. Muster,
-Termin vereinbart») stoppt die Sequenz endgültig und verwirft ungesendete Mails; möglich aus
-jedem Status, auch `replied` oder `waiting`. Eine spätere Mail-Antwort wird als Nachricht
-gespeichert, der Status bleibt `won`. `get_stats` zählt sie unter `won`, die Übersicht unter
-«Erfolgreich». `unmark_lead_won` nimmt es zurück (auf `replied`, wenn eine Antwort vorliegt,
-sonst `stopped`); die Sequenz wird nicht fortgesetzt. In der Weboberfläche: «Als erfolgreich
-markieren» bzw. «Erfolgreich zurücknehmen» auf der Lead-Seite.
+Für das Ergebnis eines Leads ausserhalb der Mails, z.B. nach einem Telefonat (Rückruf übers
+Telefonsekretariat): `set_lead_outcome` mit `outcome` `won` (erfolgreich, Rückruf, Termin
+vereinbart) oder `not_interested` (Absage) und kurzer Notiz (`note`). Die Sequenz stoppt
+endgültig, ungesendete Mails werden verworfen; möglich aus jedem Status, auch `replied` oder
+`waiting`. Eine spätere Mail-Antwort wird als Nachricht gespeichert, der Status bleibt.
+`get_stats` zählt beides (`won`, `not_interested`), die Übersicht unter «Erfolgreich» und
+«Nicht interessiert». `clear_lead_outcome` nimmt es zurück (auf `replied`, wenn eine Antwort
+vorliegt, sonst `stopped`); die Sequenz wird nicht fortgesetzt. Die Adresse kommt nicht auf die
+Sperrliste. In der Weboberfläche: Notiz eintragen und «Erfolgreich» bzw. «Nicht interessiert»
+auf der Lead-Seite, zurück mit «Ergebnis zurücknehmen».
 
-Nicht interessiert: Absagen per Mail stuft der Zammad-Abgleich als `not_interested` ein (an der
-eingegangenen Nachricht, in `get_stats` unter `replies_by_class`), der Lead steht auf `replied`.
+Absagen per Mail stuft der Zammad-Abgleich als `not_interested` ein (an der eingegangenen
+Nachricht, in `get_stats` unter `replies_by_class`), der Lead steht dann auf `replied`.
 
 ### Lead-Suche
 

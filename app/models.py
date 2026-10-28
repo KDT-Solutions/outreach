@@ -152,8 +152,12 @@ LEAD_STATUSES = (
     "skipped",      # operator skipped
     "draft_failed", # text generation failed repeatedly, waits for a manual fix
     "waiting",      # parked by the operator until a condition is met (wait_reason); released to wait_prev_status
-    "won",          # success (e.g. phone call, meeting agreed), set by the operator; sequence stopped
+    "won",          # outcome set by the operator: success (call back, meeting agreed); sequence stopped
+    "not_interested",  # outcome set by the operator: refusal (e.g. on the phone); sequence stopped
 )
+
+# final outcomes set by the operator; a later mail reply does not overwrite them
+OUTCOME_STATUSES = ("won", "not_interested")
 
 
 class Lead(Base):
@@ -202,9 +206,9 @@ class Lead(Base):
     # status "waiting": why, and the status the lead goes back to when released
     wait_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     wait_prev_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    # status "won": when and why (e.g. "Rückruf, Termin vereinbart"); kept when a reply arrives later
-    won_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    won_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # outcome (status won / not_interested): when and why, e.g. "Rückruf, Termin vereinbart"
+    outcome_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    outcome_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Optional feedback from the unsubscribe page
     unsubscribe_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)

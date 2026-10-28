@@ -1,10 +1,10 @@
 {% macro status_badge(s) -%}
-{% set cls = {'enriched':'info','scheduled':'info','in_sequence':'info','finished':'ok','replied':'ok','needs_review':'warn','no_email':'bad','bounced':'bad','unsubscribed':'bad','stopped':'','skipped':'','draft_failed':'bad','new':'','waiting':'warn','won':'ok'}.get(s, '') %}
+{% set cls = {'enriched':'info','scheduled':'info','in_sequence':'info','finished':'ok','replied':'ok','needs_review':'warn','no_email':'bad','bounced':'bad','unsubscribed':'bad','stopped':'','skipped':'','draft_failed':'bad','new':'','waiting':'warn','won':'ok','not_interested':'bad'}.get(s, '') %}
 <span class="badge {{ cls }}">{{ status_label(s) }}</span>
 {%- endmacro %}
 
 {% macro status_label(s) -%}
-{{ {'waiting':'wartend','won':'erfolgreich'}.get(s, s) }}
+{{ {'waiting':'wartend','won':'erfolgreich','not_interested':'nicht interessiert'}.get(s, s) }}
 {%- endmacro %}
 
 {% macro campaign_badge(c) -%}

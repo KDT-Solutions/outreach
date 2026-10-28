@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from .. import crypto, pipeline
 from ..config import get_settings
 from ..db import SessionLocal
-from ..models import LEAD_STATUSES, ApiAudit, Campaign, Lead, Message, Suppression, Tenant, TenantSignature
+from ..models import LEAD_STATUSES, OUTCOME_STATUSES, ApiAudit, Campaign, Lead, Message, Suppression, Tenant, TenantSignature
 from ..services import leadsearch, signature, smtp2go, templating
 from . import schemas
 from .security import Principal
@@ -228,8 +228,8 @@ def lead_dict(l: Lead) -> dict:
     )
     if l.status == "waiting":
         d.update(wait_reason=l.wait_reason, status_after_release=l.wait_prev_status)
-    if l.status == "won":
-        d.update(won_at=_iso(l.won_at), won_note=l.won_note)
+    if l.status in OUTCOME_STATUSES:
+        d.update(outcome_at=_iso(l.outcome_at), outcome_note=l.outcome_note)
     if l.status == "unsubscribed" or l.unsubscribe_reason:
         d.update(unsubscribe_reason=l.unsubscribe_reason, unsubscribe_comment=l.unsubscribe_comment, unsubscribed_at=_iso(l.unsubscribed_at), unsubscribe_source=l.unsubscribe_source)
     return d
@@ -297,6 +297,7 @@ def get_stats(db: Session, call: Call, campaign_id: int) -> dict:
         "bounces": statuses.get("bounced", 0),
         "unsubscribed": statuses.get("unsubscribed", 0),
         "won": statuses.get("won", 0),
+        "not_interested": statuses.get("not_interested", 0),
         "unsubscribe_reasons": {k or "ohne_angabe": v for k, v in unsub_reasons.items()},
         "replies": sum(replies.values()) - auto,
         "auto_replies": auto,
@@ -521,34 +522,36 @@ def release_leads(db: Session, call: Call, campaign_id: int, data: schemas.Relea
     return {"confirmed": True, "released": [{"lead_id": k, "status": v} for k, v in done.items()]}
 
 
-def mark_lead_won(db: Session, call: Call, lead_id: int, data: schemas.LeadWon) -> dict:
-    """Success outside the mail flow (e.g. the lead called back): stop the sequence for good,
-    discard unsent mails, keep the note. A later mail reply does not overwrite it."""
+def set_lead_outcome(db: Session, call: Call, lead_id: int, data: schemas.LeadOutcome) -> dict:
+    """Result outside the mail flow: won (called back, meeting agreed) or not_interested
+    (refusal on the phone). Stops the sequence for good, discards unsent mails, keeps the
+    note. A later mail reply does not overwrite it."""
     lead = _lead(db, call, lead_id)
     pending = [m.id for m in lead.messages if m.direction == "out" and m.status in ("draft", "approved")]
     preview = {
         "lead": {"lead_id": lead.id, "firma": lead.company, "status": lead.status},
-        "status": {"from": lead.status, "to": "won"},
+        "status": {"from": lead.status, "to": data.outcome},
         "note": data.note,
-        "pending_mails_discarded": 0 if lead.status == "won" else len(pending),
-        "effect": "Sequenz gestoppt, keine weiteren Mails. Zählt in get_stats als won.",
+        "pending_mails_discarded": 0 if lead.status == data.outcome else len(pending),
+        "effect": f"Sequenz gestoppt, keine weiteren Mails. Zählt in get_stats als {data.outcome}.",
     }
     if not data.confirm:
         return _preview(preview)
-    discarded = pipeline.mark_lead_won(db, lead, data.note)
-    call.detail = f"won: {data.note or '-'}"[:2000]
+    discarded = pipeline.set_lead_outcome(db, lead, data.outcome, data.note)
+    call.detail = f"{data.outcome}: {data.note or '-'}"[:2000]
     return {"confirmed": True, "lead": lead_dict(lead), "pending_mails_discarded": discarded}
 
 
-def unmark_lead_won(db: Session, call: Call, lead_id: int, data: schemas.Confirm) -> dict:
+def clear_lead_outcome(db: Session, call: Call, lead_id: int, data: schemas.Confirm) -> dict:
     lead = _lead(db, call, lead_id)
-    if lead.status != "won":
-        raise ApiError(409, "not_won", f"Lead hat Status {lead.status}, nicht won")
+    if lead.status not in OUTCOME_STATUSES:
+        raise ApiError(409, "no_outcome", f"Lead hat Status {lead.status}, kein Ergebnis (won/not_interested)")
     if not data.confirm:
-        return _preview({"lead_id": lead.id, "status": {"from": "won", "to": "replied oder stopped"},
+        return _preview({"lead_id": lead.id, "status": {"from": lead.status, "to": "replied oder stopped"},
                          "effect": "Die Sequenz wird nicht fortgesetzt."})
-    new = pipeline.unmark_lead_won(db, lead)
-    call.detail = f"won -> {new}"
+    old = lead.status
+    new = pipeline.clear_lead_outcome(db, lead)
+    call.detail = f"{old} -> {new}"
     return {"confirmed": True, "lead": lead_dict(lead)}
 
 

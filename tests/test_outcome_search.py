@@ -1,4 +1,4 @@
-"""Status "won" (success outside the mail flow) and the lead search across campaigns."""
+"""Outcomes won / not_interested (set by the operator, e.g. after a call) and the lead search across campaigns."""
 
 import re
 
@@ -27,50 +27,56 @@ def _ui():
     return ui, csrf
 
 
-# ---------------------------------------------------------------- won
-def test_mark_won_stops_sequence_and_keeps_note(client, db_data):
+# ---------------------------------------------------------------- outcome
+def test_won_stops_sequence_and_keeps_note(client, db_data):
     lid = _lead(db_data, company="H.S.K CLES SERVICES", email="info@hsk.example", status="in_sequence", step=1)
     with SessionLocal() as db:
         db.add(Message(lead_id=lid, tenant_id=db_data["alpha"], direction="out", step=1, subject="Relance", body="x", status="draft"))
         db.commit()
-    r = client.post(f"/api/v1/leads/{lid}/won", json={"note": "Rückruf, Termin vereinbaren"}, headers=AUTH).json()
+    url = f"/api/v1/leads/{lid}/outcome"
+    r = client.post(url, json={"outcome": "won", "note": "Rückruf, Termin vereinbaren"}, headers=AUTH).json()
     assert r["confirmed"] is False and r["preview"]["pending_mails_discarded"] == 1
-    r = client.post(f"/api/v1/leads/{lid}/won", json={"note": "Rückruf, Termin vereinbaren", "confirm": True}, headers=AUTH).json()
-    assert r["lead"]["status"] == "won" and r["lead"]["won_note"] == "Rückruf, Termin vereinbaren" and r["pending_mails_discarded"] == 1
+    r = client.post(url, json={"outcome": "won", "note": "Rückruf, Termin vereinbaren", "confirm": True}, headers=AUTH).json()
+    assert r["lead"]["status"] == "won" and r["lead"]["outcome_note"] == "Rückruf, Termin vereinbaren" and r["pending_mails_discarded"] == 1
     with SessionLocal() as db:
         lead = db.get(Lead, lid)
-        assert lead.next_send_at is None and lead.won_at is not None
+        assert lead.next_send_at is None and lead.outcome_at is not None
         assert [m.status for m in lead.messages] == ["failed"]
     stats = client.get(f"/api/v1/campaigns/{db_data['campaign_alpha']}/stats", headers=AUTH).json()
-    assert stats["won"] == 1
+    assert stats["won"] == 1 and stats["not_interested"] == 0
 
 
-def test_won_from_waiting_and_undo(client, db_data):
+def test_not_interested_from_waiting_and_undo(client, db_data):
     lid = _lead(db_data, company="Parked", status="waiting", wait_reason="x", wait_prev_status="in_sequence", step=1)
-    err, body = call(client, "mark_lead_won", lead_id=lid, note="Termin", confirm=True)
-    assert not err and body["lead"]["status"] == "won"
+    err, body = call(client, "set_lead_outcome", lead_id=lid, outcome="not_interested", note="am Telefon abgesagt", confirm=True)
+    assert not err and body["lead"]["status"] == "not_interested"
     with SessionLocal() as db:
         lead = db.get(Lead, lid)
         assert lead.wait_reason is None and lead.wait_prev_status is None
-    err, body = call(client, "unmark_lead_won", lead_id=lid, confirm=True)
+    stats = client.get(f"/api/v1/campaigns/{db_data['campaign_alpha']}/stats", headers=AUTH).json()
+    assert stats["not_interested"] == 1
+    err, body = call(client, "clear_lead_outcome", lead_id=lid, confirm=True)
     assert not err and body["lead"]["status"] == "stopped"  # no reply: sequence is not resumed
-    err, body = call(client, "unmark_lead_won", lead_id=lid, confirm=True)
-    assert err and body["error"]["code"] == "not_won"
+    err, body = call(client, "clear_lead_outcome", lead_id=lid, confirm=True)
+    assert err and body["error"]["code"] == "no_outcome"
 
 
-def test_won_is_tenant_scoped(client, db_data):
-    lid = _lead(db_data, campaign="campaign_beta", tenant="beta", company="Fremd", status="in_sequence")
-    err, body = call(client, "mark_lead_won", lead_id=lid, confirm=True)
+def test_outcome_validation_and_scope(client, db_data):
+    lid = _lead(db_data, company="Eigen", status="in_sequence")
+    err, body = call(client, "set_lead_outcome", lead_id=lid, outcome="vielleicht", confirm=True)
+    assert err and body["error"]["code"] == "validation_error"
+    fid = _lead(db_data, campaign="campaign_beta", tenant="beta", company="Fremd", status="in_sequence")
+    err, body = call(client, "set_lead_outcome", lead_id=fid, outcome="won", confirm=True)
     assert err and body["error"]["code"] == "not_found"
 
 
-def test_reply_does_not_overwrite_won(client, db_data, monkeypatch):
+def test_reply_does_not_overwrite_outcome(client, db_data, monkeypatch):
     from app import pipeline
     from app.models import Tenant
     from app.services import llm, zammad
     from app import crypto
 
-    lid = _lead(db_data, company="Regio", email="r@regio.example", status="won", step=1)
+    lid = _lead(db_data, company="Regio", email="r@regio.example", status="not_interested", step=1)
     with SessionLocal() as db:
         t = db.get(Tenant, db_data["alpha"])
         t.zammad_url, t.zammad_token_enc = "https://zammad.example", crypto.encrypt("tok")
@@ -86,19 +92,23 @@ def test_reply_does_not_overwrite_won(client, db_data, monkeypatch):
         pipeline.poll_replies(db)
     with SessionLocal() as db:
         lead = db.get(Lead, lid)
-        assert lead.status == "won" and [m.direction for m in lead.messages] == ["in"]
+        assert lead.status == "not_interested" and [m.direction for m in lead.messages] == ["in"]
 
 
-def test_ui_mark_won_and_dashboard(client, db_data):
-    lid = _lead(db_data, company="Klee Schlüssel", status="in_sequence")
+def test_ui_outcomes_and_dashboard(client, db_data):
+    a = _lead(db_data, company="Klee Schlüssel", status="in_sequence")
+    b = _lead(db_data, company="Absage AG", status="in_sequence")
     ui, csrf = _ui()
-    r = ui.post(f"/leads/{lid}/action", data={"csrf": csrf, "action": "won", "won_note": "Rückruf Hr. Klee"}, follow_redirects=False)
+    r = ui.post(f"/leads/{a}/action", data={"csrf": csrf, "action": "won", "outcome_note": "Rückruf Hr. Klee"}, follow_redirects=False)
     assert r.status_code == 303
-    page = ui.get(f"/leads/{lid}").text
-    assert "erfolgreich" in page and "Rückruf Hr. Klee" in page and "Erfolgreich zurücknehmen" in page
-    assert ui.post(f"/leads/{lid}/action", data={"csrf": csrf, "action": "requeue"}).status_code == 409
+    page = ui.get(f"/leads/{a}").text
+    assert "erfolgreich" in page and "Rückruf Hr. Klee" in page and "Ergebnis zurücknehmen" in page
+    assert ui.post(f"/leads/{a}/action", data={"csrf": csrf, "action": "requeue"}).status_code == 409
+    ui.post(f"/leads/{b}/action", data={"csrf": csrf, "action": "not_interested", "outcome_note": "am Telefon abgesagt"}, follow_redirects=False)
+    assert "nicht interessiert" in ui.get(f"/leads/{b}").text
     dash = ui.get("/").text
-    assert "Erfolgreich" in dash and 'name="q"' in dash
+    assert "Erfolgreich" in dash and "Nicht interessiert" in dash and 'name="q"' in dash
+    assert "Absage AG" in ui.get("/leads", params={"status": "not_interested"}).text
 
 
 # ---------------------------------------------------------------- search

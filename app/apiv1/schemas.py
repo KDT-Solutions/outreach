@@ -3,7 +3,7 @@ arguments, so both transports reject the same input with the same messages."""
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -146,7 +146,8 @@ class ReleaseLeads(_LeadSelection):
     pass
 
 
-class LeadWon(_Strict):
+class LeadOutcome(_Strict):
+    outcome: Literal["won", "not_interested"]
     note: Line(500) | None = None
     confirm: bool = False
 

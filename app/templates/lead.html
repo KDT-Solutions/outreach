@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_macros.html" import status_badge, dt %}
+{% extends "base.html" %}{% from "_macros.html" import status_badge, status_label, dt %}
 {% block content %}
 <h1>{{ lead.company }} {{ status_badge(lead.status) }}</h1>
 <div class="grid">
@@ -16,7 +16,7 @@
 <tr><th>Nächster Versand</th><td>{{ dt(lead.next_send_at) }}</td></tr>
 <tr><th>Letzter Versand</th><td>{{ dt(lead.last_sent_at) }}</td></tr>
 <tr><th>Notiz</th><td>{{ lead.notes or '–' }}</td></tr>
-{% if lead.status == 'won' %}<tr><th>Erfolgreich</th><td>{{ dt(lead.won_at) }}{% if lead.won_note %} · {{ lead.won_note }}{% endif %}</td></tr>{% endif %}
+{% if lead.status in ('won', 'not_interested') %}<tr><th>Ergebnis</th><td>{{ status_label(lead.status) }}, {{ dt(lead.outcome_at) }}{% if lead.outcome_note %} · {{ lead.outcome_note }}{% endif %}</td></tr>{% endif %}
 {% if lead.status == 'waiting' %}<tr><th>Wartet auf</th><td>{{ lead.wait_reason or '–' }} <span class="muted small">(danach {{ lead.wait_prev_status or '–' }})</span></td></tr>{% endif %}
 {% if lead.campaign.status == 'waiting' %}<tr><th>Kampagne</th><td>wartend: {{ lead.campaign.wait_reason or '–' }}</td></tr>{% endif %}
 {% if lead.status == 'unsubscribed' or lead.unsubscribe_reason %}<tr><th>Abmeldegrund</th><td>{{ lead.unsubscribe_reason or 'keine Angabe' }}{% if lead.unsubscribe_comment %}<br><span class="small">{{ lead.unsubscribe_comment }}</span>{% endif %}{% if lead.unsubscribed_at %} <span class="muted small">({{ dt(lead.unsubscribed_at) }}{% if lead.unsubscribe_source %}, {{ lead.unsubscribe_source }}{% endif %})</span>{% endif %}</td></tr>{% endif %}
@@ -33,9 +33,9 @@
 <button name="action" value="suppress" class="danger small" {% if not lead.email %}disabled{% endif %}>Auf Sperrliste</button>
 </form>
 <form method="post" action="/leads/{{ lead.id }}/action"><input type="hidden" name="csrf" value="{{ csrf }}">
-{% if lead.status == 'won' %}<div class="actions"><button name="action" value="unwon" class="secondary small">Erfolgreich zurücknehmen</button></div>
-{% else %}<label>Erfolgreich, Notiz</label><input type="text" name="won_note" maxlength="500" placeholder="z.B. Rückruf, Termin vereinbart">
-<div class="actions"><button name="action" value="won" class="small">Als erfolgreich markieren</button></div>{% endif %}
+{% if lead.status in ('won', 'not_interested') %}<div class="actions"><button name="action" value="clear_outcome" class="secondary small">Ergebnis zurücknehmen</button></div>
+{% else %}<label>Ergebnis, Notiz</label><input type="text" name="outcome_note" maxlength="500" placeholder="z.B. Rückruf, Termin vereinbart / am Telefon abgesagt">
+<div class="actions"><button name="action" value="won" class="small">Erfolgreich</button><button name="action" value="not_interested" class="secondary small">Nicht interessiert</button></div>{% endif %}
 </form>
 <form method="post" action="/leads/{{ lead.id }}/action"><input type="hidden" name="csrf" value="{{ csrf }}">
 {% if lead.status == 'waiting' %}<div class="actions"><button name="action" value="release" class="small">Nicht mehr wartend</button></div>
