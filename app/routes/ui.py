@@ -16,7 +16,7 @@ from .. import auth, crypto, pipeline
 from ..auth import COOKIE, require_csrf, require_login
 from ..config import get_settings
 from ..db import get_db
-from ..models import LEAD_STATUSES, Campaign, Event, Lead, Message, Suppression, Tenant, TenantSignature
+from ..models import LEAD_STATUSES, OUTCOME_STATUSES, Campaign, Event, Lead, Message, Suppression, Tenant, TenantSignature
 from ..services import leadsearch, mailtext, scheduling, templating
 
 router = APIRouter()
@@ -338,12 +338,12 @@ async def lead_action(lead_id: int, request: Request, sess: dict = Depends(requi
     reason = " ".join(f.get("wait_reason", "").split())[:500]
     if action == "wait" and not reason:
         raise HTTPException(400, "Für wartend einen Grund angeben")
-    won_note = " ".join(f.get("won_note", "").split())[:500]
-    if action in ("stop", "skip", "requeue", "set_email", "generate", "suppress", "wait", "release", "won", "unwon"):
+    outcome_note = " ".join(f.get("outcome_note", "").split())[:500]
+    if action in ("stop", "skip", "requeue", "set_email", "generate", "suppress", "wait", "release", "won", "not_interested", "clear_outcome"):
         _audit(db, request, sess, f"ui_lead_{action}", lead.tenant_id, {"lead_id": lead.id, "campaign_id": lead.campaign_id},
-               f.get("email", "").strip() if action == "set_email" else reason if action == "wait" else won_note if action == "won" else "")
-    if lead.status == "won" and action in ("requeue", "set_email", "generate", "wait", "release", "stop", "skip"):
-        raise HTTPException(409, "Lead ist erfolgreich, zuerst 'Erfolgreich zurücknehmen'")
+               f.get("email", "").strip() if action == "set_email" else reason if action == "wait" else outcome_note if action in OUTCOME_STATUSES else "")
+    if lead.status in OUTCOME_STATUSES and action in ("requeue", "set_email", "generate", "wait", "release", "stop", "skip"):
+        raise HTTPException(409, "Lead hat ein Ergebnis, zuerst 'Ergebnis zurücknehmen'")
     if lead.status == "waiting" and action in ("requeue", "set_email", "generate"):
         raise HTTPException(409, "Lead ist wartend, zuerst freigeben")
     if action in ("stop", "skip"):
@@ -398,10 +398,10 @@ async def lead_action(lead_id: int, request: Request, sess: dict = Depends(requi
             raise HTTPException(409, f"Leads mit Status {lead.status} können nicht auf wartend gesetzt werden")
     elif action == "release":
         pipeline.release_lead(db, lead)
-    elif action == "won":
-        pipeline.mark_lead_won(db, lead, won_note)
-    elif action == "unwon":
-        pipeline.unmark_lead_won(db, lead)
+    elif action in OUTCOME_STATUSES:
+        pipeline.set_lead_outcome(db, lead, action, outcome_note)
+    elif action == "clear_outcome":
+        pipeline.clear_lead_outcome(db, lead)
     elif action == "note":
         lead.notes = f.get("notes", "").strip()
     db.commit()

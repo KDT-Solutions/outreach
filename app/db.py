@@ -64,8 +64,8 @@ def _ensure_columns() -> None:
             "unsubscribe_source": "VARCHAR(20)",
             "wait_reason": "TEXT",
             "wait_prev_status": "VARCHAR(20)",
-            "won_at": "TIMESTAMP WITH TIME ZONE",
-            "won_note": "TEXT",
+            "outcome_at": "TIMESTAMP WITH TIME ZONE",
+            "outcome_note": "TEXT",
         },
         "campaigns": {
             "from_name": "VARCHAR(120)",

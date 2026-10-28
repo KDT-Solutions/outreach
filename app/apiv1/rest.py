@@ -73,14 +73,14 @@ def unsuppress_lead(request: Request, lead_id: int, body: schemas.Confirm):
     return _run(request, "unsuppress_lead", partial(service.unsuppress_lead, lead_id=lead_id, data=body), write=True)
 
 
-@router.post("/leads/{lead_id}/won", summary="mark_lead_won")
-def mark_lead_won(request: Request, lead_id: int, body: schemas.LeadWon):
-    return _run(request, "mark_lead_won", partial(service.mark_lead_won, lead_id=lead_id, data=body), write=True)
+@router.post("/leads/{lead_id}/outcome", summary="set_lead_outcome")
+def set_lead_outcome(request: Request, lead_id: int, body: schemas.LeadOutcome):
+    return _run(request, "set_lead_outcome", partial(service.set_lead_outcome, lead_id=lead_id, data=body), write=True)
 
 
-@router.post("/leads/{lead_id}/unwon", summary="unmark_lead_won")
-def unmark_lead_won(request: Request, lead_id: int, body: schemas.Confirm):
-    return _run(request, "unmark_lead_won", partial(service.unmark_lead_won, lead_id=lead_id, data=body), write=True)
+@router.post("/leads/{lead_id}/outcome/clear", summary="clear_lead_outcome")
+def clear_lead_outcome(request: Request, lead_id: int, body: schemas.Confirm):
+    return _run(request, "clear_lead_outcome", partial(service.clear_lead_outcome, lead_id=lead_id, data=body), write=True)
 
 
 @router.get("/leads/search", summary="find_leads")

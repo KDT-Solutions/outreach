@@ -19,6 +19,7 @@
     <div class="stat"><b>{{ r.sent_today }} / {{ r.tenant.daily_limit }}</b>heute gesendet</div>
     <div class="stat"><b>{{ r.counts.get('replied', 0) }}</b>Antworten</div>
     <div class="stat"><b>{{ r.counts.get('won', 0) }}</b><a href="/leads?status=won">Erfolgreich</a></div>
+    <div class="stat"><b>{{ r.counts.get('not_interested', 0) }}</b><a href="/leads?status=not_interested">Nicht interessiert</a></div>
   </div>
   <p class="small muted">Sendefenster {{ r.tenant.send_hour_start }}–{{ r.tenant.send_hour_end }} Uhr{% if r.tenant.send_weekdays_only %}, Mo–Fr{% endif %} · {% if r.in_window %}<span class="badge ok">offen</span>{% else %}<span class="badge">geschlossen</span>{% endif %}</p>
   <p class="small">{% for s, n in r.counts.items() %}{{ status_badge(s) }} {{ n }} {% endfor %}</p>

@@ -34,7 +34,7 @@ Kontrolle: list_audit_log zeigt, wer was wann ausgelöst hat (API, MCP, Weboberf
 Freigabe (auto_approve):
 - auto_approve=false (Standard): Jeder Mailentwurf, auch jedes Follow-up, bekommt Lead-Status "needs_review" und wartet in der Weboberfläche unter /review. Erst nach Freigabe durch Kim (Weboberfläche oder approve_drafts) wird die Mail terminiert und im Sendefenster verschickt. Ohne Freigabe geht nichts raus, egal wie lange ein Entwurf liegt. Kampagne "active" heisst also nur: Leads werden gesucht, angereichert und Entwürfe geschrieben.
 - auto_approve=true: Entwürfe werden ohne Sichtung sofort als freigegeben gespeichert und im nächsten Sendefenster verschickt. Nur setzen, wenn Kim das ausdrücklich will.
-Lead-Status: new (gefunden) -> enriched (E-Mail gefunden) -> needs_review (Entwurf wartet) -> scheduled (freigegeben, wartet aufs Sendefenster) -> in_sequence (mindestens eine Mail gesendet, weitere Schritte offen) -> finished (alle Schritte gesendet). Erfolg: won (von Hand gesetzt mit mark_lead_won, z.B. nach einem Rückruf oder vereinbarten Termin; Sequenz gestoppt, zählt in get_stats als won, wird von späteren Mail-Antworten nicht überschrieben; zurück mit unmark_lead_won). Abbrüche: replied (Antwort via Zammad erkannt, Sequenz gestoppt; die Einstufung interested/not_interested usw. steht an der eingegangenen Nachricht, replies_by_class in get_stats), bounced, unsubscribed, stopped, skipped, no_email, draft_failed (Entwurf 3x gescheitert, wartet auf Korrektur per update_lead; last_error zeigt die Modellantwort), waiting (vom Betreiber geparkt, wait_reason und status_after_release im Lead).
+Lead-Status: new (gefunden) -> enriched (E-Mail gefunden) -> needs_review (Entwurf wartet) -> scheduled (freigegeben, wartet aufs Sendefenster) -> in_sequence (mindestens eine Mail gesendet, weitere Schritte offen) -> finished (alle Schritte gesendet). Ergebnis (von Hand mit set_lead_outcome, z.B. nach einem Telefonat; Sequenz gestoppt, zählt in get_stats, wird von späteren Mail-Antworten nicht überschrieben; zurück mit clear_lead_outcome): won (erfolgreich, Rückruf/Termin), not_interested (Absage). Abbrüche: replied (Antwort via Zammad erkannt, Sequenz gestoppt; die Einstufung interested/not_interested usw. steht an der eingegangenen Nachricht, replies_by_class in get_stats), bounced, unsubscribed, stopped, skipped, no_email, draft_failed (Entwurf 3x gescheitert, wartet auf Korrektur per update_lead; last_error zeigt die Modellantwort), waiting (vom Betreiber geparkt, wait_reason und status_after_release im Lead).
 Kampagnen-Status: draft, active, paused, waiting (geparkt mit wait_reason, Entwürfe ausgeblendet), done.
 Sendefenster pro Mandant: standardmässig Mo-Fr 9-17 Uhr, Tageslimit 40, Versand mit Zufallsverzögerung; Follow-ups werden einen Tag vor Fälligkeit als Entwurf vorbereitet.
 Ausgehende Mails werden nicht in Zammad erfasst; Antworten kommen über das Zammad-Postfach des Mandanten herein, stoppen die Sequenz und erhalten eine interne Notiz mit Lead-Link."""
@@ -233,16 +233,16 @@ def release_leads(ctx: Context, campaign_id: int, lead_ids: list[int] | None = N
     return _run(ctx, "release_leads", lambda db, call: service.release_leads(db, call, campaign_id, data), write=True)
 
 
-@mcp.tool(description="Lead als erfolgreich markieren (Status won), z.B. nach einem Rückruf oder vereinbarten Termin. Sequenz stoppt, ungesendete Mails werden verworfen, note hält fest, was passiert ist. Auch von replied oder wartend aus möglich.")
-def mark_lead_won(ctx: Context, lead_id: int, note: str | None = None, confirm: Confirm = False) -> dict:
-    data = _model(schemas.LeadWon, note=note, confirm=confirm)
-    return _run(ctx, "mark_lead_won", lambda db, call: service.mark_lead_won(db, call, lead_id, data), write=True)
+@mcp.tool(description="Ergebnis eines Leads festhalten, z.B. nach einem Telefonat: outcome won (erfolgreich, Rückruf/Termin) oder not_interested (Absage). Sequenz stoppt endgültig, ungesendete Mails werden verworfen, note hält fest, was passiert ist. Aus jedem Status möglich, auch replied oder wartend.")
+def set_lead_outcome(ctx: Context, lead_id: int, outcome: str, note: str | None = None, confirm: Confirm = False) -> dict:
+    data = _model(schemas.LeadOutcome, outcome=outcome, note=note, confirm=confirm)
+    return _run(ctx, "set_lead_outcome", lambda db, call: service.set_lead_outcome(db, call, lead_id, data), write=True)
 
 
-@mcp.tool(description="Erfolgreich (won) zurücknehmen, falls versehentlich gesetzt. Der Lead geht auf replied (wenn eine Antwort vorliegt) oder stopped; die Sequenz wird nicht fortgesetzt.")
-def unmark_lead_won(ctx: Context, lead_id: int, confirm: Confirm = False) -> dict:
+@mcp.tool(description="Ergebnis (won / not_interested) zurücknehmen, falls versehentlich gesetzt. Der Lead geht auf replied (wenn eine Antwort vorliegt) oder stopped; die Sequenz wird nicht fortgesetzt.")
+def clear_lead_outcome(ctx: Context, lead_id: int, confirm: Confirm = False) -> dict:
     data = _model(schemas.Confirm, confirm=confirm)
-    return _run(ctx, "unmark_lead_won", lambda db, call: service.unmark_lead_won(db, call, lead_id, data), write=True)
+    return _run(ctx, "clear_lead_outcome", lambda db, call: service.clear_lead_outcome(db, call, lead_id, data), write=True)
 
 
 @mcp.tool(description="Leads über alle Kampagnen suchen: Firma, Telefon in jeder Schreibweise (+41 21 ..., 021 ...), Ansprechperson, Ort, Adresse, E-Mail, Domain, Notizen. Satzzeichen und Akzente egal. Alle Wörter müssen passen; sonst kommen die Leads mit den meisten Treffern (partial_match=true). Optional tenant und status.")
@@ -250,7 +250,7 @@ def find_leads(ctx: Context, query: str, tenant: str | None = None, status: str 
     return _run(ctx, "find_leads", lambda db, call: service.find_leads(db, call, query, tenant, status, limit))
 
 
-@mcp.tool(description="Kennzahlen: gesendet, Bounces, Abmeldungen, Antworten (aus dem Zammad-Abgleich, nach Einstufung), erfolgreiche Leads (won).")
+@mcp.tool(description="Kennzahlen: gesendet, Bounces, Abmeldungen, Antworten (aus dem Zammad-Abgleich, nach Einstufung), Ergebnisse won und not_interested.")
 def get_stats(ctx: Context, campaign_id: int) -> dict:
     return _run(ctx, "get_stats", lambda db, call: service.get_stats(db, call, campaign_id))
 

@@ -1,7 +1,7 @@
 """Lead search for the web UI: finds a lead from what a caller or a phone note gives you.
 
 Matches company, e-mail, domain, website, phone, address, city, contact person, notes and
-the reasons for "waiting"/"won", across all campaigns. Punctuation, case and accents are
+the waiting reason and the outcome note, across all campaigns. Punctuation, case and accents are
 ignored ("HSK" finds "H.S.K CLES SERVICES", "cles" finds "Clés"); phone numbers match in
 any notation (+41 21 831 00 01, 021 831 00 01, 0041218310001).
 
@@ -31,7 +31,7 @@ STOPWORDS = {
 
 _FIELDS = (
     Lead.company, Lead.email, Lead.domain, Lead.website, Lead.phone, Lead.address, Lead.city,
-    Lead.contact_name, Lead.first_name, Lead.last_name, Lead.notes, Lead.wait_reason, Lead.won_note,
+    Lead.contact_name, Lead.first_name, Lead.last_name, Lead.notes, Lead.wait_reason, Lead.outcome_note,
 )
 
 
@@ -73,7 +73,7 @@ def _haystack(lead: Lead) -> tuple[str, str]:
     text = " ".join(fold(getattr(lead, col.key)) for col in _FIELDS)
     # every phone-like run in the lead (phone field, notes) as its last digits
     phones = " ".join(
-        _phone_key(m.group()) for field in (lead.phone, lead.notes, lead.won_note, lead.wait_reason)
+        _phone_key(m.group()) for field in (lead.phone, lead.notes, lead.outcome_note, lead.wait_reason)
         for m in re.finditer(r"\+?\d[\d\s/().-]{4,}\d", field or "")
     )
     return text, phones
@@ -91,7 +91,7 @@ def search(db: Session, q: str, campaign_id: int | None = None, status: str | No
     best partial matches are returned instead. tenant_ids restricts the search (API scope)."""
     wanted = terms(q)
     query = db.query(Lead).options(load_only(*_FIELDS, Lead.id, Lead.status, Lead.step, Lead.next_send_at,
-                                             Lead.email_source, Lead.campaign_id, Lead.tenant_id, Lead.won_at))
+                                             Lead.email_source, Lead.campaign_id, Lead.tenant_id, Lead.outcome_at))
     query = query.filter(Lead.deleted_at.is_(None))
     if tenant_ids is not None:
         query = query.filter(Lead.tenant_id.in_(tenant_ids))
